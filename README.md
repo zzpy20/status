@@ -35,7 +35,11 @@ sidesteps that entirely.
 - **Cron Trigger** (`wrangler.toml`, `[triggers]`) -- runs the check on a schedule (default: every minute) via the Worker's `scheduled()` handler, skipping any paused targets. A target with zero check history yet (just added) shows as **Pending**, not Down/Up.
 - **D1** -- every check (up or down, with latency) is logged as a row, so uptime percentages, incident history, and response times are computed from real data, not just "current state".
 - **Status page** (`/`) -- current state, 24h/7d uptime %, time since last downtime, per target, with a search box (matches name/host/tag) and clickable tag pills. Also a `/api/status` JSON endpoint.
+- **Incidents page** (`/incidents`) -- every incident across every monitor, newest-first (not time-windowed, unlike the per-monitor 24h view), with a "Root Cause" per incident (see below) and search-by-name. Public/read-only.
 - **Per-monitor detail page** (`/monitor/:id`) -- current status and how long it's been in that state, 24h/7d/30d uptime % with incident counts and total downtime per window, response-time average/min/max plus a simple chart, and a table of recent incidents. Public/read-only, same as the status page.
+- **Root cause** -- each check that fails records a short reason (`"Timeout"`, `"HTTP 503 Service Unavailable"`, `"Keyword not found in response"`, `"No A records found"`, `"Resolved value doesn't match expected '1.2.3.4'"`, etc.), stored per-check and surfaced on the Incidents page as whichever reason started that incident.
+- Deliberately **not implemented**, unlike UptimeRobot's full dashboard: Comments/Visibility columns on incidents, and separate Status pages/Maintenance/Team members/Integrations nav tabs -- those are multi-user/team features with nothing behind them for a single-person tool.
+- **Reset** (admin only) -- wipes a single monitor's check history (uptime %, incidents, latency stats are all computed live from that history, so this alone is a full "start fresh") without touching its name/type/config/tags/notes. Useful after a known, expected outage (e.g. you deliberately power-cycled a server) that would otherwise permanently skew that monitor's stats.
 - **Tags** -- short, public labels per monitor (comma-separated), shown as pills on every page and searchable/clickable to filter.
 - **Notes** -- a free-text field for your own recall (what this monitor is for, context, etc.), supporting basic **bold**/*italic*/underline/~~strikethrough~~ via lightweight text markers (not raw HTML -- text is escaped first, so nothing typed here can inject real markup). **Admin-only: never exposed on the status page, `/api/status`, or `/monitor/:id`.**
 - **Admin UI** (`/admin`) -- add, edit, pause/resume, delete monitors, search, and send a test notification, all from one page. Protected by a bearer token.
@@ -56,7 +60,7 @@ Requires `wrangler` (`npm install -g wrangler` or use the one already on your ma
    ```bash
    wrangler d1 migrations apply status-uptime --remote
    ```
-   `migrations/0001_init.sql` creates the `checks` table. `0002_targets_and_latency.sql` adds the `targets` table (seeded with example rows -- edit/delete them from the admin UI after deploying) and latency tracking. `0003_tags_and_notes.sql` adds tags/notes. `0004_monitor_types.sql` adds the `type`/`config` columns for HTTP and DNS monitors.
+   `migrations/0001_init.sql` creates the `checks` table. `0002_targets_and_latency.sql` adds the `targets` table (seeded with example rows -- edit/delete them from the admin UI after deploying) and latency tracking. `0003_tags_and_notes.sql` adds tags/notes. `0004_monitor_types.sql` adds the `type`/`config` columns for HTTP and DNS monitors. `0005_fail_reason.sql` adds the failure-reason column used on the Incidents page.
 
 3. **Edit `wrangler.toml`:**
    - `[[routes]]` `pattern` -- the hostname you want the status page on (must be a hostname on a zone already in your Cloudflare account; `custom_domain = true` handles the DNS record automatically on deploy).
