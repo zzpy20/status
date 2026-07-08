@@ -2,14 +2,19 @@ import { checkPort } from "./checker.js";
 import * as db from "./db.js";
 import { renderStatusPage, renderDetailPage, renderAdminPage } from "./render.js";
 import { handleAdminApi } from "./admin.js";
-import { sendTelegram } from "./telegram.js";
+import { notifyAll } from "./notify.js";
+import { formatBrisbaneTime } from "./time.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 const WEEK = 7 * DAY;
 const MONTH = 30 * DAY;
 
 async function notifyStateChange(env, target, isUp) {
-    await sendTelegram(env, `${target.name}: ${isUp ? "back up" : "DOWN"}\n${target.host}:${target.port} -- ${new Date().toISOString()}`);
+    const monitorUrl = `${env.PUBLIC_BASE_URL || ""}/monitor/${target.id}`;
+    await notifyAll(env, {
+        target, isUp, monitorUrl,
+        text: `${target.name}: ${isUp ? "back up" : "DOWN"}\n${target.host}:${target.port} -- ${formatBrisbaneTime()}`,
+    });
 }
 
 async function runChecks(env) {

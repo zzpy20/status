@@ -368,8 +368,9 @@ export function renderAdminPage() {
             loadTargets();
         }
         async function testNotify(id) {
-            await api(\`/admin/api/targets/\${id}/test-notify\`, { method: "POST" });
-            alert("Test notification sent (if Telegram is configured).");
+            const result = await api(\`/admin/api/targets/\${id}/test-notify\`, { method: "POST" });
+            const line = (label, r) => label + ": " + (r.sent ? "sent" : "not sent (" + (r.reason || "channel not configured") + ")");
+            alert(line("Telegram", result.telegram) + "\\n" + line("Email", result.email));
         }
         async function removeTarget(id) {
             if (!confirm("Delete this monitor and all its history?")) return;

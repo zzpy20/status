@@ -14,7 +14,12 @@ crons = ["*/1 * * * *"]
 pattern = "status.1000600.xyz"
 custom_domain = true
 
-# TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are both Workers secrets (`wrangler
-# secret put`), not plaintext vars here -- the bot token grants send access,
-# and the chat ID is a personal identifier neither belongs in this public
-# repo. See README.
+[vars]
+# Used to build the "View monitor" link in notification emails. Not
+# sensitive -- it's the same hostname already public in [[routes]] above.
+PUBLIC_BASE_URL = "https://status.1000600.xyz"
+
+# TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, RESEND_API_KEY, and OWNER_EMAIL are
+# all Workers secrets (`wrangler secret put`), not plaintext vars here -- the
+# tokens grant send access, and the chat ID/email address are personal
+# identifiers, neither belongs in this public repo. See README.

@@ -1,5 +1,6 @@
 import * as db from "./db.js";
-import { sendTelegram } from "./telegram.js";
+import { notifyAll } from "./notify.js";
+import { formatBrisbaneTime } from "./time.js";
 
 function unauthorized() {
     return new Response("Unauthorized", { status: 401 });
@@ -13,7 +14,12 @@ function isAuthed(request, env) {
 }
 
 async function sendTestNotify(env, target) {
-    return sendTelegram(env, `Test notification: ${target.name}\n${target.host}:${target.port} -- test notification triggered from admin, ${new Date().toISOString()}`);
+    const monitorUrl = `${env.PUBLIC_BASE_URL || ""}/monitor/${target.id}`;
+    const [telegram, email] = await notifyAll(env, {
+        target, isUp: true, monitorUrl,
+        text: `Test notification: ${target.name}\n${target.host}:${target.port} -- test notification triggered from admin, ${formatBrisbaneTime()}`,
+    });
+    return { telegram, email };
 }
 
 // Handles all /admin/api/* routes. Returns null if the path isn't one of ours,
