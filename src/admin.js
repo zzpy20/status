@@ -31,7 +31,7 @@ export async function handleAdminApi(request, env, url) {
     // /admin/api/targets
     if (parts.length === 1 && parts[0] === "targets") {
         if (request.method === "GET") {
-            return Response.json(await db.listTargets(env.DB));
+            return Response.json(await db.statusRows(env.DB));
         }
         if (request.method === "POST") {
             const body = await request.json();

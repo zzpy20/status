@@ -1,3 +1,34 @@
+const DAY = 24 * 60 * 60 * 1000;
+const WEEK = 7 * DAY;
+
+// Shared by the public status page/API and the admin UI, so both always
+// show the same real up/down state -- the admin list previously only knew
+// about paused/not-paused and never looked at actual check results.
+export async function statusRows(db) {
+    const now = Date.now();
+    const targets = await listTargets(db);
+    return Promise.all(targets.map(async (t) => {
+        const last = await lastCheck(db, t.id);
+        const uptime24h = await uptimeStats(db, t.id, now - DAY);
+        const uptime7d = await uptimeStats(db, t.id, now - WEEK);
+        const lastDownRow = await db.prepare(
+            "SELECT MAX(checked_at) AS last_down FROM checks WHERE target_id = ? AND is_up = 0"
+        ).bind(t.id).first();
+        return {
+            id: t.id,
+            name: t.name,
+            host: t.host,
+            port: t.port,
+            paused: t.paused,
+            is_up: last ? last.is_up === 1 : false,
+            checked_at: last ? last.checked_at : null,
+            uptime_24h: uptime24h.pct,
+            uptime_7d: uptime7d.pct,
+            last_down: lastDownRow?.last_down ?? null,
+        };
+    }));
+}
+
 export async function listTargets(db, { includePaused = true } = {}) {
     const sql = includePaused
         ? "SELECT * FROM targets ORDER BY id"

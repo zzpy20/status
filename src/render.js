@@ -297,13 +297,24 @@ export function renderAdminPage() {
             return res.json();
         }
 
+        function timeAgo(t) {
+            if (t == null) return "never";
+            const s = Math.floor((Date.now() - t) / 1000);
+            if (s < 60) return s + "s ago";
+            if (s < 3600) return Math.floor(s / 60) + "m ago";
+            if (s < 86400) return Math.floor(s / 3600) + "h ago";
+            return Math.floor(s / 86400) + "d ago";
+        }
         function viewRow(t) {
+            const dotClass = t.paused ? "paused" : (t.is_up ? "up" : "down");
+            const stateText = t.paused ? "Paused" : (t.is_up ? "Up" : "Down") + " \\u00b7 " + timeAgo(t.checked_at);
             return \`<div class="Box-row" data-id="\${t.id}">
-                <span class="dot \${t.paused ? 'paused' : 'up'}"></span>
+                <span class="dot \${dotClass}"></span>
                 <div class="grow">
                     <strong>\${t.name}</strong>
                     <div class="mono">\${t.host}:\${t.port}</div>
                 </div>
+                <div class="mono" style="min-width:130px">\${stateText}</div>
                 <div class="actions">
                     <button class="link" onclick="startEdit(\${t.id})">Edit</button>
                     <button onclick="togglePause(\${t.id}, \${t.paused})">\${t.paused ? 'Resume' : 'Pause'}</button>

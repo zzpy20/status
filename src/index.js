@@ -38,31 +38,6 @@ async function runChecks(env) {
     return results;
 }
 
-async function buildStatusRows(env) {
-    const now = Date.now();
-    const targets = await db.listTargets(env.DB);
-    return Promise.all(targets.map(async (t) => {
-        const last = await db.lastCheck(env.DB, t.id);
-        const uptime24h = await db.uptimeStats(env.DB, t.id, now - DAY);
-        const uptime7d = await db.uptimeStats(env.DB, t.id, now - WEEK);
-        const lastDownRow = await env.DB.prepare(
-            "SELECT MAX(checked_at) AS last_down FROM checks WHERE target_id = ? AND is_up = 0"
-        ).bind(t.id).first();
-        return {
-            id: t.id,
-            name: t.name,
-            host: t.host,
-            port: t.port,
-            paused: t.paused,
-            is_up: last ? last.is_up === 1 : false,
-            checked_at: last ? last.checked_at : null,
-            uptime_24h: uptime24h.pct,
-            uptime_7d: uptime7d.pct,
-            last_down: lastDownRow?.last_down ?? null,
-        };
-    }));
-}
-
 // Finds when the target entered its current up/down state, by scanning back
 // from the latest check for the most recent transition.
 async function findStateSince(env, targetId, currentIsUp) {
@@ -117,12 +92,12 @@ export default {
         const url = new URL(request.url);
 
         if (url.pathname === "/") {
-            const rows = await buildStatusRows(env);
+            const rows = await db.statusRows(env.DB);
             return new Response(renderStatusPage(rows), { headers: { "content-type": "text/html; charset=utf-8" } });
         }
 
         if (url.pathname === "/api/status") {
-            return Response.json(await buildStatusRows(env));
+            return Response.json(await db.statusRows(env.DB));
         }
 
         if (url.pathname.startsWith("/monitor/")) {
