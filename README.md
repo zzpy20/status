@@ -1,5 +1,7 @@
 # status
 
+[English](README.md) | [中文](README_CN.md)
+
 A minimal, self-hosted uptime monitor: a Cloudflare Worker checks a list of
 TCP ports on a schedule, logs every result to D1, and serves a status page,
 per-monitor detail pages, an admin UI/API for managing what's monitored, and
