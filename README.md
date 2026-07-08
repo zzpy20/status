@@ -33,7 +33,7 @@ sidesteps that entirely.
 - **Per-monitor detail page** (`/monitor/:id`) -- current status and how long it's been in that state, 24h/7d/30d uptime % with incident counts and total downtime per window, response-time average/min/max plus a simple chart, and a table of recent incidents. Public/read-only, same as the status page.
 - **Admin UI** (`/admin`) -- add, edit, pause/resume, delete monitors, and send a test notification, all from one page. Protected by a bearer token.
 - **Admin API** (`/admin/api/*`) -- the same operations as the UI, as plain JSON endpoints, for scripting.
-- **Telegram push notifications** -- on a state change (up→down or down→up) the Worker sends a message via a Telegram bot.
+- **Telegram + email push notifications** -- on a state change (up→down or down→up) the Worker sends a Telegram message and a styled HTML email in parallel; each channel is independent (one failing doesn't block the other), and either can be left unconfigured to disable it.
 
 ## Setup
 
@@ -81,6 +81,17 @@ Requires `wrangler` (`npm install -g wrangler` or use the one already on your ma
 
    **Why Telegram and not ntfy.sh:** ntfy.sh was the original choice, but its free tier turned out to rate-limit publishing by source IP regardless of authentication -- and Cloudflare Workers share egress IPs across huge numbers of unrelated users/services also publishing to ntfy.sh, so that shared quota was already exhausted well before this app's own (very low) usage would ever hit a real limit. Every test run from a personal machine worked; every real notification sent from the deployed Worker silently failed with a 429, invisible until logged explicitly. Telegram's Bot API doesn't have this shared-quota problem.
 
+8. **(Optional) Enable email notifications too, via [Resend](https://resend.com):**
+   - Sign up (free tier) and generate an API key.
+   - Set your API key and destination email as secrets:
+     ```bash
+     echo "your-resend-api-key" | wrangler secret put RESEND_API_KEY
+     echo "your-email@example.com" | wrangler secret put OWNER_EMAIL
+     ```
+   - (Optional) `RESEND_FROM` -- a custom "from" address, requires verifying a domain in Resend first. Defaults to Resend's sandbox sender (`onboarding@resend.dev`), which works without any domain verification.
+   - Email addresses are validated strictly by Resend -- if you get a `422 ... non-ASCII characters` error, a stray invisible character snuck into `OWNER_EMAIL` during copy/paste; re-set it by typing it fresh.
+   - Telegram and email are independent -- set up one, both, or neither.
+
 That's it -- no server, no container, no always-on machine required.
 
 ## Notes / limitations
@@ -90,3 +101,4 @@ That's it -- no server, no container, no always-on machine required.
 - **Silent notification failures are a real risk with any webhook-style integration.** Don't swallow errors with a bare `.catch(() => {})` on the notify call -- log the response status/body on failure, or a broken notification channel can go unnoticed indefinitely (this happened once already in this project, see the ntfy.sh note above).
 - **Single vantage point.** Checks always run from wherever Cloudflare schedules Cron Triggers (not distributed across regions the way a paid UptimeRobot plan is) -- fine for "is this reachable at all," not meant to detect region-specific network issues.
 - **Admin auth is a single shared token**, not per-user accounts. Fine for personal use; if this ever needs multiple people with different access levels, that would need real auth (e.g. Cloudflare Access) instead.
+- **Notification timestamps are hardcoded to `Australia/Brisbane`** (`src/time.js`) for this deployment. If you reuse this Worker for a project in a different timezone, change the `timeZone` there -- Brisbane specifically never observes daylight saving, so the "AEST" label is hardcoded too; a DST-observing timezone would need to compute the correct abbreviation instead of hardcoding one.
