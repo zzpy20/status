@@ -25,13 +25,20 @@ sidesteps that entirely.
 
 ## How it works
 
-- **`targets` table (D1)** -- what to monitor: `{ name, host, port, paused }`. Managed through the admin UI/API, not a source file.
-- **Cron Trigger** (`wrangler.toml`, `[triggers]`) -- runs the check on a schedule (default: every minute) via the Worker's `scheduled()` handler, skipping any paused targets.
-- **TCP check** -- uses the Workers `cloudflare:sockets` API (`connect()`) to attempt a raw TCP connection to each target, with a timeout, timing how long the connection takes. This is the same check `nc -z` does locally -- it tells you the port is open and accepting connections (and how fast), nothing about HTTP/application-level health.
+- **`targets` table (D1)** -- what to monitor: `{ name, type, host, port, config, paused, tags, notes }`. Managed through the admin UI/API, not a source file.
+- **Three monitor types:**
+  - **Port (TCP)** -- uses the Workers `cloudflare:sockets` API (`connect()`) to attempt a raw TCP connection, with a timeout, timing how long the connection takes. The same check `nc -z` does locally -- tells you the port is open and accepting connections (and how fast), nothing about application-level health.
+  - **HTTP** -- plain `fetch()` against a URL. "Up" means `res.ok` (2xx-3xx) by default; optionally require an exact status code, and/or that a keyword appears in the response body.
+  - **DNS** -- resolves a hostname via DNS-over-HTTPS (Cloudflare's own resolver, `cloudflare-dns.com/dns-query`) -- no raw DNS protocol needed, which the Workers runtime doesn't expose anyway. "Up" means at least one record resolves; optionally require a specific value among the results (e.g. a specific IP for an A record).
+  - Deliberately **not implemented**: Ping/ICMP and UDP monitoring -- the Workers sockets API is TCP-only, there's no raw ICMP/UDP access available at all. Also skipped: Cron/heartbeat monitoring (a fundamentally different "push" shape of check, not a poll) and structured API/JSON-assertion monitoring (real complexity for a need HTTP+keyword already covers).
+  - `host` doubles as the primary identifier for every type (the URL for HTTP, the hostname for DNS, the TCP host for Port); `config` (JSON) holds only the few type-specific extra fields (`expectedStatus`/`keyword` for HTTP, `recordType`/`expectedValue` for DNS).
+- **Cron Trigger** (`wrangler.toml`, `[triggers]`) -- runs the check on a schedule (default: every minute) via the Worker's `scheduled()` handler, skipping any paused targets. A target with zero check history yet (just added) shows as **Pending**, not Down/Up.
 - **D1** -- every check (up or down, with latency) is logged as a row, so uptime percentages, incident history, and response times are computed from real data, not just "current state".
-- **Status page** (`/`) -- current state, 24h/7d uptime %, time since last downtime, per target. Also a `/api/status` JSON endpoint.
+- **Status page** (`/`) -- current state, 24h/7d uptime %, time since last downtime, per target, with a search box (matches name/host/tag) and clickable tag pills. Also a `/api/status` JSON endpoint.
 - **Per-monitor detail page** (`/monitor/:id`) -- current status and how long it's been in that state, 24h/7d/30d uptime % with incident counts and total downtime per window, response-time average/min/max plus a simple chart, and a table of recent incidents. Public/read-only, same as the status page.
-- **Admin UI** (`/admin`) -- add, edit, pause/resume, delete monitors, and send a test notification, all from one page. Protected by a bearer token.
+- **Tags** -- short, public labels per monitor (comma-separated), shown as pills on every page and searchable/clickable to filter.
+- **Notes** -- a free-text field for your own recall (what this monitor is for, context, etc.), supporting basic **bold**/*italic*/underline/~~strikethrough~~ via lightweight text markers (not raw HTML -- text is escaped first, so nothing typed here can inject real markup). **Admin-only: never exposed on the status page, `/api/status`, or `/monitor/:id`.**
+- **Admin UI** (`/admin`) -- add, edit, pause/resume, delete monitors, search, and send a test notification, all from one page. Protected by a bearer token.
 - **Admin API** (`/admin/api/*`) -- the same operations as the UI, as plain JSON endpoints, for scripting.
 - **Telegram + email push notifications** -- on a state change (up→down or down→up) the Worker sends a Telegram message and a styled HTML email in parallel; each channel is independent (one failing doesn't block the other), and either can be left unconfigured to disable it.
 
@@ -49,7 +56,7 @@ Requires `wrangler` (`npm install -g wrangler` or use the one already on your ma
    ```bash
    wrangler d1 migrations apply status-uptime --remote
    ```
-   `migrations/0001_init.sql` creates the `checks` table. `migrations/0002_targets_and_latency.sql` adds the `targets` table (seeded with example rows -- edit/delete them from the admin UI after deploying) and latency tracking.
+   `migrations/0001_init.sql` creates the `checks` table. `0002_targets_and_latency.sql` adds the `targets` table (seeded with example rows -- edit/delete them from the admin UI after deploying) and latency tracking. `0003_tags_and_notes.sql` adds tags/notes. `0004_monitor_types.sql` adds the `type`/`config` columns for HTTP and DNS monitors.
 
 3. **Edit `wrangler.toml`:**
    - `[[routes]]` `pattern` -- the hostname you want the status page on (must be a hostname on a zone already in your Cloudflare account; `custom_domain = true` handles the DNS record automatically on deploy).
@@ -96,9 +103,11 @@ That's it -- no server, no container, no always-on machine required.
 
 ## Notes / limitations
 
-- **TCP-only.** This checks "does the port accept a connection," not "does the application behind it work correctly." Fine for proxies, SSH, databases, etc.; not a substitute for an HTTP/keyword check if you need to validate actual application responses.
+- **Port checks are TCP-only.** They confirm "does the port accept a connection," not "does the application behind it work correctly." HTTP checks fill that gap for websites/APIs; Port stays right for proxies, SSH, databases, etc.
 - **D1 write volume.** Every check writes a row (by design, for full history) -- fine at the free tier's limits for a handful of targets checked every minute, but if monitoring many targets very frequently, consider checking less often or only writing on state change.
 - **Silent notification failures are a real risk with any webhook-style integration.** Don't swallow errors with a bare `.catch(() => {})` on the notify call -- log the response status/body on failure, or a broken notification channel can go unnoticed indefinitely (this happened once already in this project, see the ntfy.sh note above).
+- **Server-side validation must account for type-specific sentinels.** `port: 0` is a valid, intentional value for non-Port monitors (meaning "not applicable") -- a naive `!body.port` truthiness check rejects it, since `0` is falsy in JS. Hit this for real when HTTP monitors silently failed to save; fixed by checking `port` requiredness only when `type === "port"`.
+- **A monitor with zero check history shows "Pending," not "Down."** Defaulting an unchecked target to "Down" is actively misleading -- looked like a bug (working site shown as down) until traced to just being the ~1-minute window before the first cron tick.
 - **Single vantage point.** Checks always run from wherever Cloudflare schedules Cron Triggers (not distributed across regions the way a paid UptimeRobot plan is) -- fine for "is this reachable at all," not meant to detect region-specific network issues.
 - **Admin auth is a single shared token**, not per-user accounts. Fine for personal use; if this ever needs multiple people with different access levels, that would need real auth (e.g. Cloudflare Access) instead.
 - **Notification timestamps are hardcoded to `Australia/Brisbane`** (`src/time.js`) for this deployment. If you reuse this Worker for a project in a different timezone, change the `timeZone` there -- Brisbane specifically never observes daylight saving, so the "AEST" label is hardcoded too; a DST-observing timezone would need to compute the correct abbreviation instead of hardcoding one.
