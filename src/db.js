@@ -71,15 +71,22 @@ export async function deleteTarget(db, id) {
     await db.prepare("DELETE FROM targets WHERE id = ?").bind(id).run();
 }
 
+// Wipes check history for one target (uptime %, incidents, latency stats
+// are all computed live from `checks`, so this alone is a full "start
+// fresh") without touching the target's own config/tags/notes.
+export async function resetTarget(db, id) {
+    await db.prepare("DELETE FROM checks WHERE target_id = ?").bind(id).run();
+}
+
 export async function setPaused(db, id, paused) {
     await db.prepare("UPDATE targets SET paused = ? WHERE id = ?").bind(paused ? 1 : 0, id).run();
     return getTarget(db, id);
 }
 
-export async function insertCheck(db, target, isUp, latencyMs) {
+export async function insertCheck(db, target, isUp, latencyMs, reason) {
     await db.prepare(
-        "INSERT INTO checks (target, target_id, host, port, is_up, latency_ms, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    ).bind(target.name, target.id, target.host, target.port, isUp ? 1 : 0, latencyMs, Date.now()).run();
+        "INSERT INTO checks (target, target_id, host, port, is_up, latency_ms, fail_reason, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    ).bind(target.name, target.id, target.host, target.port, isUp ? 1 : 0, latencyMs, isUp ? null : (reason || null), Date.now()).run();
 }
 
 export async function lastCheck(db, targetId) {
@@ -115,10 +122,12 @@ export async function latencySeries(db, targetId, sinceMs, limit = 100) {
 // Groups consecutive is_up=0 rows (in chronological order) into incidents.
 // An incident's "end" is the timestamp it was next confirmed back up (or
 // "now" if still ongoing) -- using the last down check's own timestamp would
-// understate an incident's duration by up to one check interval.
+// understate an incident's duration by up to one check interval. Each
+// incident's "reason" is the fail_reason of the check that started it --
+// what triggered the outage, not every reason seen during it if it changed.
 export async function incidents(db, targetId, sinceMs) {
     const { results } = await db.prepare(
-        `SELECT is_up, checked_at FROM checks
+        `SELECT is_up, checked_at, fail_reason FROM checks
          WHERE target_id = ? AND checked_at > ? ORDER BY checked_at ASC`
     ).bind(targetId, sinceMs).all();
 
@@ -126,7 +135,7 @@ export async function incidents(db, targetId, sinceMs) {
     let current = null;
     for (const row of results) {
         if (row.is_up === 0) {
-            if (!current) current = { start: row.checked_at, end: row.checked_at };
+            if (!current) current = { start: row.checked_at, end: row.checked_at, reason: row.fail_reason };
         } else if (current) {
             current.end = row.checked_at;
             out.push(current);
@@ -141,4 +150,20 @@ export async function incidents(db, targetId, sinceMs) {
 
     const totalDownMs = out.reduce((sum, i) => sum + (i.end - i.start), 0);
     return { list: out, count: out.length, totalDownMs };
+}
+
+// All incidents across every target, newest-first, for the global Incidents
+// page. Reuses the per-target grouping above rather than a single complex
+// SQL query -- fine at the scale this tool actually runs at.
+export async function allIncidents(db, limit = 200) {
+    const targets = await listTargets(db);
+    const out = [];
+    for (const t of targets) {
+        const { list } = await incidents(db, t.id, 0);
+        for (const inc of list) {
+            out.push({ targetId: t.id, targetName: t.name, start: inc.start, end: inc.end, ongoing: !!inc.ongoing, reason: inc.reason });
+        }
+    }
+    out.sort((a, b) => b.start - a.start);
+    return out.slice(0, limit);
 }

@@ -3,12 +3,12 @@ import { connect } from "cloudflare:sockets";
 export async function checkPort(host, port, timeoutMs = 5000) {
     const start = Date.now();
     const socket = connect({ hostname: host, port });
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), timeoutMs));
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), timeoutMs));
     try {
         await Promise.race([socket.opened, timeout]);
         return { isUp: true, latencyMs: Date.now() - start };
-    } catch {
-        return { isUp: false, latencyMs: null };
+    } catch (err) {
+        return { isUp: false, latencyMs: null, reason: err.message || "Connection failed" };
     } finally {
         try { socket.close(); } catch {}
     }
@@ -21,14 +21,25 @@ export async function checkHttp(url, { expectedStatus, keyword } = {}, timeoutMs
     try {
         const res = await fetch(url, { signal: controller.signal, redirect: "follow" });
         const latencyMs = Date.now() - start;
-        let isUp = expectedStatus ? res.status === Number(expectedStatus) : res.ok;
-        if (isUp && keyword) {
-            const body = await res.text();
-            isUp = body.includes(keyword);
+
+        if (expectedStatus) {
+            if (res.status !== Number(expectedStatus)) {
+                return { isUp: false, latencyMs, reason: `Expected status ${expectedStatus}, got ${res.status}` };
+            }
+        } else if (!res.ok) {
+            return { isUp: false, latencyMs, reason: `HTTP ${res.status} ${res.statusText}` };
         }
-        return { isUp, latencyMs };
-    } catch {
-        return { isUp: false, latencyMs: null };
+
+        if (keyword) {
+            const body = await res.text();
+            if (!body.includes(keyword)) {
+                return { isUp: false, latencyMs, reason: "Keyword not found in response" };
+            }
+        }
+        return { isUp: true, latencyMs };
+    } catch (err) {
+        const reason = err.name === "AbortError" ? "Timeout" : (err.message || "Request failed");
+        return { isUp: false, latencyMs: null, reason };
     } finally {
         clearTimeout(timeoutId);
     }
@@ -44,14 +55,19 @@ export async function checkDns(hostname, { recordType = "A", expectedValue } = {
         const url = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=${encodeURIComponent(recordType)}`;
         const res = await fetch(url, { headers: { Accept: "application/dns-json" }, signal: controller.signal });
         const latencyMs = Date.now() - start;
-        if (!res.ok) return { isUp: false, latencyMs };
+        if (!res.ok) return { isUp: false, latencyMs, reason: `DNS query failed (${res.status})` };
+
         const data = await res.json();
         const answers = (data.Answer || []).map((a) => a.data);
-        let isUp = answers.length > 0;
-        if (isUp && expectedValue) isUp = answers.some((v) => v.includes(expectedValue));
-        return { isUp, latencyMs };
-    } catch {
-        return { isUp: false, latencyMs: null };
+        if (!answers.length) return { isUp: false, latencyMs, reason: `No ${recordType} records found` };
+
+        if (expectedValue && !answers.some((v) => v.includes(expectedValue))) {
+            return { isUp: false, latencyMs, reason: `Resolved value doesn't match expected '${expectedValue}'` };
+        }
+        return { isUp: true, latencyMs };
+    } catch (err) {
+        const reason = err.name === "AbortError" ? "Timeout" : (err.message || "Request failed");
+        return { isUp: false, latencyMs: null, reason };
     } finally {
         clearTimeout(timeoutId);
     }

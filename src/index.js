@@ -1,6 +1,6 @@
 import { runCheck } from "./checker.js";
 import * as db from "./db.js";
-import { renderStatusPage, renderDetailPage, renderAdminPage } from "./render.js";
+import { renderStatusPage, renderDetailPage, renderAdminPage, renderIncidentsPage } from "./render.js";
 import { handleAdminApi } from "./admin.js";
 import { notifyAll } from "./notify.js";
 import { formatBrisbaneTime } from "./time.js";
@@ -24,8 +24,8 @@ async function runChecks(env) {
     for (const target of targets) {
         try {
             const previous = await db.lastCheck(env.DB, target.id);
-            const { isUp, latencyMs } = await runCheck(target);
-            await db.insertCheck(env.DB, target, isUp, latencyMs);
+            const { isUp, latencyMs, reason } = await runCheck(target);
+            await db.insertCheck(env.DB, target, isUp, latencyMs, reason);
 
             if (previous && previous.is_up !== (isUp ? 1 : 0)) {
                 await notifyStateChange(env, target, isUp);
@@ -112,6 +112,11 @@ export default {
             const data = await buildDetailData(env, id);
             if (!data) return new Response("Not found", { status: 404 });
             return new Response(renderDetailPage(data), { headers: { "content-type": "text/html; charset=utf-8" } });
+        }
+
+        if (url.pathname === "/incidents") {
+            const incidents = await db.allIncidents(env.DB);
+            return new Response(renderIncidentsPage(incidents), { headers: { "content-type": "text/html; charset=utf-8" } });
         }
 
         if (url.pathname === "/admin") {

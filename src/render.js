@@ -186,6 +186,17 @@ function pageShell(title, bodyHtml) {
 </html>`;
 }
 
+function navRow(active) {
+    const items = [
+        { key: "status", label: "Status", href: "/" },
+        { key: "incidents", label: "Incidents", href: "/incidents" },
+        { key: "admin", label: "Admin", href: "/admin" },
+    ];
+    return `<nav style="margin-bottom:20px">${items.map((i) =>
+        i.key === active ? `<strong>${i.label}</strong>` : `<a href="${i.href}">${i.label}</a>`
+    ).join(' <span class="mono">&middot;</span> ')}</nav>`;
+}
+
 function tagList(tagsString) {
     return (tagsString || "").split(",").map((t) => t.trim()).filter(Boolean);
 }
@@ -212,11 +223,12 @@ export function renderStatusPage(rows) {
         </div>`).join("");
 
     return pageShell("status", `
+        ${navRow("status")}
         <h1 class="page-title">Status</h1>
         <div class="search-box"><input id="search" placeholder="Search by name, host, or tag..." oninput="filterRows()"></div>
         <div class="Box" id="rows-box">${items}</div>
         <p id="no-results" class="mono" style="display:none">No monitors match your search.</p>
-        <footer>Checked every minute via Cloudflare Workers Cron Triggers + D1 &middot; <a href="/admin">admin</a></footer>
+        <footer>Checked every minute via Cloudflare Workers Cron Triggers + D1</footer>
         <script>
         function filterRows() {
             const q = document.getElementById("search").value.trim().toLowerCase();
@@ -266,7 +278,7 @@ export function renderDetailPage(m) {
         </tr>`).join("") || `<tr><td colspan="3" class="mono">No incidents in the last 24h.</td></tr>`;
 
     return pageShell(m.name, `
-        <p><a href="/">&larr; Status</a></p>
+        ${navRow("status")}
         <h1 class="page-title"><span class="dot ${m.is_up == null ? "pending" : m.is_up ? "up" : "down"}"></span> ${m.name}</h1>
         <p class="mono">${targetIdentifier(m)}</p>
         ${tagPillsHtml(m.tags, "goToTag")}
@@ -297,13 +309,51 @@ export function renderDetailPage(m) {
                 <tbody>${incidentRows}</tbody>
             </table>
         </div>
+    `);
+}
 
-        <footer><a href="/admin">admin</a></footer>
+export function renderIncidentsPage(incidents) {
+    const rows = incidents.map((inc) => `
+        <tr data-search="${inc.targetName.toLowerCase()}">
+            <td><span class="dot ${inc.ongoing ? "down" : "up"}"></span> ${inc.ongoing ? "Ongoing" : "Resolved"}</td>
+            <td><a href="/monitor/${inc.targetId}">${inc.targetName}</a></td>
+            <td>${inc.reason || "—"}</td>
+            <td>${new Date(inc.start).toLocaleString()}</td>
+            <td>${inc.ongoing ? "—" : new Date(inc.end).toLocaleString()}</td>
+            <td>${duration(inc.end - inc.start)}</td>
+        </tr>`).join("") || `<tr><td colspan="6" class="mono">No incidents recorded yet.</td></tr>`;
+
+    return pageShell("incidents", `
+        ${navRow("incidents")}
+        <h1 class="page-title">Incidents</h1>
+        <div class="search-box"><input id="search" placeholder="Search by monitor name..." oninput="filterIncidentRows()"></div>
+        <div class="Box">
+            <table>
+                <thead><tr><th>Status</th><th>Monitor</th><th>Root Cause</th><th>Started</th><th>Resolved</th><th>Duration</th></tr></thead>
+                <tbody id="rows-body">${rows}</tbody>
+            </table>
+        </div>
+        <p id="no-results" class="mono" style="display:none">No incidents match your search.</p>
+        <footer>Showing the most recent ${incidents.length} incident${incidents.length === 1 ? "" : "s"} across all monitors</footer>
+        <script>
+        function filterIncidentRows() {
+            const q = document.getElementById("search").value.trim().toLowerCase();
+            const rows = document.querySelectorAll("#rows-body tr");
+            let visible = 0;
+            rows.forEach((row) => {
+                const match = !q || (row.dataset.search || "").includes(q);
+                row.style.display = match ? "" : "none";
+                if (match) visible++;
+            });
+            document.getElementById("no-results").style.display = visible ? "none" : "block";
+        }
+        </script>
     `);
 }
 
 export function renderAdminPage() {
     return pageShell("admin", `
+        ${navRow("admin")}
         <h1 class="page-title">Admin</h1>
         <div id="auth-box" class="Box" style="padding:16px; margin-bottom:24px; display:none">
             <div class="form-row">
@@ -363,8 +413,6 @@ export function renderAdminPage() {
             </div>
             <div style="margin-top:8px"><button class="primary" onclick="addTarget()">Add monitor</button></div>
         </div>
-
-        <footer><a href="/">&larr; Status page</a></footer>
 
         <script>
         const TOKEN_KEY = "status_admin_token";
@@ -465,6 +513,7 @@ export function renderAdminPage() {
                     <button class="link" onclick="startEdit(\${t.id})">Edit</button>
                     <button onclick="togglePause(\${t.id}, \${t.paused})">\${t.paused ? 'Resume' : 'Pause'}</button>
                     <button onclick="testNotify(\${t.id})">Test notify</button>
+                    <button class="danger" onclick="resetTarget(\${t.id})">Reset</button>
                     <button class="danger" onclick="removeTarget(\${t.id})">Delete</button>
                 </div>
             </div>\`;
@@ -614,6 +663,11 @@ export function renderAdminPage() {
             const result = await api(\`/admin/api/targets/\${id}/test-notify\`, { method: "POST" });
             const line = (label, r) => label + ": " + (r.sent ? "sent" : "not sent (" + (r.reason || "channel not configured") + ")");
             alert(line("Telegram", result.telegram) + "\\n" + line("Email", result.email));
+        }
+        async function resetTarget(id) {
+            if (!confirm("Reset this monitor? This permanently deletes its check history -- uptime %, incidents, and response times all start fresh. The monitor itself, its config, tags, and notes are kept.")) return;
+            await api(\`/admin/api/targets/\${id}/reset\`, { method: "POST" });
+            loadTargets();
         }
         async function removeTarget(id) {
             if (!confirm("Delete this monitor and all its history?")) return;
