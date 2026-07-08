@@ -1,0 +1,19 @@
+name = "status"
+main = "src/index.js"
+compatibility_date = "2026-07-08"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "status-uptime"
+database_id = "335be636-85e7-4ce9-8fd7-69df73a011f0"
+
+[triggers]
+crons = ["*/1 * * * *"]
+
+[[routes]]
+pattern = "status.1000600.xyz"
+custom_domain = true
+
+# NTFY_TOPIC is set as a Workers secret (`wrangler secret put NTFY_TOPIC`),
+# not a plaintext var here -- this repo is public, and the topic string
+# grants read/write access to your notification channel. See README.
