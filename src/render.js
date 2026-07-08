@@ -369,7 +369,7 @@ export function renderAdminPage() {
         }
         async function testNotify(id) {
             await api(\`/admin/api/targets/\${id}/test-notify\`, { method: "POST" });
-            alert("Test notification sent (if NTFY_TOPIC is configured).");
+            alert("Test notification sent (if Telegram is configured).");
         }
         async function removeTarget(id) {
             if (!confirm("Delete this monitor and all its history?")) return;

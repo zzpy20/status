@@ -1,4 +1,5 @@
 import * as db from "./db.js";
+import { sendTelegram } from "./telegram.js";
 
 function unauthorized() {
     return new Response("Unauthorized", { status: 401 });
@@ -12,13 +13,7 @@ function isAuthed(request, env) {
 }
 
 async function sendTestNotify(env, target) {
-    if (!env.NTFY_TOPIC) return { sent: false, reason: "NTFY_TOPIC not set" };
-    await fetch(`https://ntfy.sh/${env.NTFY_TOPIC}`, {
-        method: "POST",
-        headers: { Title: `Test notification: ${target.name}` },
-        body: `${target.host}:${target.port} -- test notification triggered from admin, ${new Date().toISOString()}`,
-    });
-    return { sent: true };
+    return sendTelegram(env, `Test notification: ${target.name}\n${target.host}:${target.port} -- test notification triggered from admin, ${new Date().toISOString()}`);
 }
 
 // Handles all /admin/api/* routes. Returns null if the path isn't one of ours,

@@ -2,19 +2,14 @@ import { checkPort } from "./checker.js";
 import * as db from "./db.js";
 import { renderStatusPage, renderDetailPage, renderAdminPage } from "./render.js";
 import { handleAdminApi } from "./admin.js";
+import { sendTelegram } from "./telegram.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 const WEEK = 7 * DAY;
 const MONTH = 30 * DAY;
 
 async function notifyStateChange(env, target, isUp) {
-    if (!env.NTFY_TOPIC) return;
-    const title = `${target.name}: ${isUp ? "back up" : "DOWN"}`;
-    await fetch(`https://ntfy.sh/${env.NTFY_TOPIC}`, {
-        method: "POST",
-        headers: { Title: title, Priority: isUp ? "default" : "high" },
-        body: `${target.host}:${target.port} -- ${new Date().toISOString()}`,
-    }).catch(() => {});
+    await sendTelegram(env, `${target.name}: ${isUp ? "back up" : "DOWN"}\n${target.host}:${target.port} -- ${new Date().toISOString()}`);
 }
 
 async function runChecks(env) {

@@ -31,7 +31,7 @@ sidesteps that entirely.
 - **Per-monitor detail page** (`/monitor/:id`) -- current status and how long it's been in that state, 24h/7d/30d uptime % with incident counts and total downtime per window, response-time average/min/max plus a simple chart, and a table of recent incidents. Public/read-only, same as the status page.
 - **Admin UI** (`/admin`) -- add, edit, pause/resume, delete monitors, and send a test notification, all from one page. Protected by a bearer token.
 - **Admin API** (`/admin/api/*`) -- the same operations as the UI, as plain JSON endpoints, for scripting.
-- **ntfy.sh push notifications** -- on a state change (up→down or down→up) the Worker POSTs to an ntfy.sh topic.
+- **Telegram push notifications** -- on a state change (up→down or down→up) the Worker sends a message via a Telegram bot.
 
 ## Setup
 
@@ -66,11 +66,18 @@ Requires `wrangler` (`npm install -g wrangler` or use the one already on your ma
 
 6. **Manage monitors:** visit `https://<your-domain>/admin`, paste the admin token into the box (saved in the browser's `localStorage` from then on), and add/edit/pause/delete targets from there.
 
-7. **(Optional) Enable push notifications on state change:**
-   ```bash
-   echo "your-topic-name" | wrangler secret put NTFY_TOPIC
-   ```
-   Same reasoning as `ADMIN_TOKEN` -- a Workers **secret**, not a `wrangler.toml` var, since the topic string grants read/write access to your ntfy.sh notification channel. Pick something unguessable (e.g. `myproject-<random hex>`). Leaving it unset disables notifications entirely (the code checks for it and no-ops); the same applies if `ADMIN_TOKEN` is left unset -- `/admin/api/*` just always returns 401.
+7. **(Optional) Enable push notifications on state change, via a Telegram bot:**
+   - Message **@BotFather** on Telegram, send `/newbot`, follow the prompts -- it replies with a bot token.
+   - Message **@userinfobot** to get your own numeric Telegram chat ID (not sensitive by itself -- useless without the bot token -- but still a personal identifier, so it's stored as a secret too rather than committed to this public repo).
+   - Message your new bot at least once (Telegram requires this before a bot can message you back).
+   - Set both as secrets:
+     ```bash
+     echo "your-bot-token" | wrangler secret put TELEGRAM_BOT_TOKEN
+     echo "your-chat-id" | wrangler secret put TELEGRAM_CHAT_ID
+     ```
+   Leaving either unset disables notifications entirely (the code checks for both and no-ops); the same applies if `ADMIN_TOKEN` is left unset -- `/admin/api/*` just always returns 401.
+
+   **Why Telegram and not ntfy.sh:** ntfy.sh was the original choice, but its free tier turned out to rate-limit publishing by source IP regardless of authentication -- and Cloudflare Workers share egress IPs across huge numbers of unrelated users/services also publishing to ntfy.sh, so that shared quota was already exhausted well before this app's own (very low) usage would ever hit a real limit. Every test run from a personal machine worked; every real notification sent from the deployed Worker silently failed with a 429, invisible until logged explicitly. Telegram's Bot API doesn't have this shared-quota problem.
 
 That's it -- no server, no container, no always-on machine required.
 
@@ -78,6 +85,6 @@ That's it -- no server, no container, no always-on machine required.
 
 - **TCP-only.** This checks "does the port accept a connection," not "does the application behind it work correctly." Fine for proxies, SSH, databases, etc.; not a substitute for an HTTP/keyword check if you need to validate actual application responses.
 - **D1 write volume.** Every check writes a row (by design, for full history) -- fine at the free tier's limits for a handful of targets checked every minute, but if monitoring many targets very frequently, consider checking less often or only writing on state change.
-- **ntfy.sh topics are public by default.** Anyone who knows/guesses your topic string can read your notifications (or send fake ones). Use a long random topic name; self-host ntfy or use a paid plan for real access control if that matters for what you're monitoring.
+- **Silent notification failures are a real risk with any webhook-style integration.** Don't swallow errors with a bare `.catch(() => {})` on the notify call -- log the response status/body on failure, or a broken notification channel can go unnoticed indefinitely (this happened once already in this project, see the ntfy.sh note above).
 - **Single vantage point.** Checks always run from wherever Cloudflare schedules Cron Triggers (not distributed across regions the way a paid UptimeRobot plan is) -- fine for "is this reachable at all," not meant to detect region-specific network issues.
 - **Admin auth is a single shared token**, not per-user accounts. Fine for personal use; if this ever needs multiple people with different access levels, that would need real auth (e.g. Cloudflare Access) instead.

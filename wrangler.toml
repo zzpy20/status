@@ -14,6 +14,7 @@ crons = ["*/1 * * * *"]
 pattern = "status.1000600.xyz"
 custom_domain = true
 
-# NTFY_TOPIC is set as a Workers secret (`wrangler secret put NTFY_TOPIC`),
-# not a plaintext var here -- this repo is public, and the topic string
-# grants read/write access to your notification channel. See README.
+# TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are both Workers secrets (`wrangler
+# secret put`), not plaintext vars here -- the bot token grants send access,
+# and the chat ID is a personal identifier neither belongs in this public
+# repo. See README.
