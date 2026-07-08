@@ -1,6 +1,7 @@
 import * as db from "./db.js";
 import { notifyAll } from "./notify.js";
 import { formatBrisbaneTime } from "./time.js";
+import { targetIdentifier } from "./identifier.js";
 
 function unauthorized() {
     return new Response("Unauthorized", { status: 401 });
@@ -17,9 +18,18 @@ async function sendTestNotify(env, target) {
     const monitorUrl = `${env.PUBLIC_BASE_URL || ""}/monitor/${target.id}`;
     const [telegram, email] = await notifyAll(env, {
         target, isUp: true, monitorUrl,
-        text: `Test notification: ${target.name}\n${target.host}:${target.port} -- test notification triggered from admin, ${formatBrisbaneTime()}`,
+        text: `Test notification: ${target.name}\n${targetIdentifier(target)} -- test notification triggered from admin, ${formatBrisbaneTime()}`,
     });
     return { telegram, email };
+}
+
+// port is required only for 'port'-type targets -- http/dns send port: 0 as
+// a sentinel (meaningless for those types), and 0 is falsy, so a plain
+// `!body.port` check would wrongly reject every valid http/dns monitor.
+function validateTargetBody(body) {
+    if (!body.name || !body.host) return "name and host/URL/hostname are required";
+    if ((body.type === "port" || !body.type) && !body.port) return "port is required for Port monitors";
+    return null;
 }
 
 // Handles all /admin/api/* routes. Returns null if the path isn't one of ours,
@@ -36,9 +46,8 @@ export async function handleAdminApi(request, env, url) {
         }
         if (request.method === "POST") {
             const body = await request.json();
-            if (!body.name || !body.host || !body.port) {
-                return Response.json({ error: "name, host, port are required" }, { status: 400 });
-            }
+            const error = validateTargetBody(body);
+            if (error) return Response.json({ error }, { status: 400 });
             return Response.json(await db.createTarget(env.DB, body), { status: 201 });
         }
     }
@@ -51,9 +60,8 @@ export async function handleAdminApi(request, env, url) {
         if (parts.length === 2) {
             if (request.method === "PUT") {
                 const body = await request.json();
-                if (!body.name || !body.host || !body.port) {
-                    return Response.json({ error: "name, host, port are required" }, { status: 400 });
-                }
+                const error = validateTargetBody(body);
+                if (error) return Response.json({ error }, { status: 400 });
                 return Response.json(await db.updateTarget(env.DB, id, body));
             }
             if (request.method === "DELETE") {

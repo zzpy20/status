@@ -1,3 +1,5 @@
+import { targetIdentifier } from "./identifier.js";
+
 function timeAgo(ms) {
     if (ms == null) return "never";
     const s = Math.floor((Date.now() - ms) / 1000);
@@ -105,6 +107,7 @@ const BASE_STYLE = `
     .dot.up { background: var(--success-emphasis); }
     .dot.down { background: var(--danger-emphasis); }
     .dot.paused { background: var(--neutral-emphasis); }
+    .dot.pending { background: #d4a72c; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg-muted); font-size: 12px; }
 
     footer { text-align: center; color: var(--fg-muted); font-size: 12px; margin-top: 32px; }
@@ -146,6 +149,26 @@ const BASE_STYLE = `
     .actions { display: flex; gap: 4px; margin-left: auto; flex-shrink: 0; }
     .grow { flex: 1 1 auto; min-width: 0; }
     .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .search-box { margin-bottom: 12px; }
+    .tag-pill {
+        display: inline-block; background: var(--btn-bg); border: 1px solid var(--btn-border);
+        border-radius: 12px; padding: 1px 8px; font-size: 11px; color: var(--fg-muted);
+        margin: 3px 4px 0 0; cursor: pointer;
+    }
+    .tag-pill:hover { background: var(--btn-hover-bg); }
+    .notes-snippet { font-size: 12px; color: var(--fg-muted); margin-top: 3px; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+    .notes-snippet:hover { color: var(--accent-fg); }
+    .notes-full { font-size: 13px; line-height: 1.6; color: var(--fg-default); margin-top: 6px; padding: 10px 12px; background: var(--canvas-subtle); border: 1px solid var(--border-muted); border-radius: 6px; max-width: 600px; }
+    .fmt-toolbar { display: flex; gap: 4px; margin-bottom: 4px; }
+    .fmt-toolbar button { padding: 2px 10px; font-size: 12px; }
+    textarea {
+        background: var(--canvas-default); color: var(--fg-default);
+        border: 1px solid var(--border-default); border-radius: 6px;
+        padding: 5px 12px; line-height: 20px; width: 100%; font: inherit; font-size: 14px;
+        resize: vertical; min-height: 38px;
+    }
+    textarea:focus { border-color: var(--accent-fg); outline: none; box-shadow: 0 0 0 3px rgba(9,105,218,0.2); }
 `;
 
 function pageShell(title, bodyHtml) {
@@ -163,15 +186,26 @@ function pageShell(title, bodyHtml) {
 </html>`;
 }
 
+function tagList(tagsString) {
+    return (tagsString || "").split(",").map((t) => t.trim()).filter(Boolean);
+}
+
+function tagPillsHtml(tagsString, onclick) {
+    const tags = tagList(tagsString);
+    if (!tags.length) return "";
+    return `<div>${tags.map((t) => `<span class="tag-pill" onclick="${onclick}('${t.replace(/'/g, "\\'")}')">${t}</span>`).join("")}</div>`;
+}
+
 export function renderStatusPage(rows) {
     const items = rows.map((r) => `
-        <div class="Box-row">
-            <span class="dot ${r.paused ? "paused" : r.is_up ? "up" : "down"}"></span>
+        <div class="Box-row" data-search="${(r.name + " " + r.host + " " + (r.tags || "")).toLowerCase()}">
+            <span class="dot ${r.paused ? "paused" : r.is_up == null ? "pending" : r.is_up ? "up" : "down"}"></span>
             <div class="grow">
                 <a href="/monitor/${r.id}"><strong>${r.name}</strong></a>
-                <div class="mono">${r.host}:${r.port}</div>
+                <div class="mono">${targetIdentifier(r)}</div>
+                ${tagPillsHtml(r.tags, "filterByTag")}
             </div>
-            <div style="min-width:110px">${r.paused ? "Paused" : r.is_up ? "Up" : "Down"} &middot; ${timeAgo(r.checked_at)}</div>
+            <div style="min-width:110px">${r.paused ? "Paused" : r.is_up == null ? "Pending first check" : (r.is_up ? "Up" : "Down") + " &middot; " + timeAgo(r.checked_at)}</div>
             <div style="min-width:70px">${pct(r.uptime_24h)} <span class="mono">24h</span></div>
             <div style="min-width:70px">${pct(r.uptime_7d)} <span class="mono">7d</span></div>
             <div style="min-width:90px" class="mono">down ${timeAgo(r.last_down)}</div>
@@ -179,8 +213,29 @@ export function renderStatusPage(rows) {
 
     return pageShell("status", `
         <h1 class="page-title">Status</h1>
-        <div class="Box">${items}</div>
+        <div class="search-box"><input id="search" placeholder="Search by name, host, or tag..." oninput="filterRows()"></div>
+        <div class="Box" id="rows-box">${items}</div>
+        <p id="no-results" class="mono" style="display:none">No monitors match your search.</p>
         <footer>Checked every minute via Cloudflare Workers Cron Triggers + D1 &middot; <a href="/admin">admin</a></footer>
+        <script>
+        function filterRows() {
+            const q = document.getElementById("search").value.trim().toLowerCase();
+            const rows = document.querySelectorAll("#rows-box .Box-row");
+            let visible = 0;
+            rows.forEach((row) => {
+                const match = !q || row.dataset.search.includes(q);
+                row.style.display = match ? "" : "none";
+                if (match) visible++;
+            });
+            document.getElementById("no-results").style.display = visible ? "none" : "block";
+        }
+        function filterByTag(tag) {
+            document.getElementById("search").value = tag;
+            filterRows();
+        }
+        const initialQ = new URLSearchParams(location.search).get("q");
+        if (initialQ) { document.getElementById("search").value = initialQ; filterRows(); }
+        </script>
     `);
 }
 
@@ -212,11 +267,13 @@ export function renderDetailPage(m) {
 
     return pageShell(m.name, `
         <p><a href="/">&larr; Status</a></p>
-        <h1 class="page-title"><span class="dot ${m.is_up ? "up" : "down"}"></span> ${m.name}</h1>
-        <p class="mono">${m.host}:${m.port}</p>
+        <h1 class="page-title"><span class="dot ${m.is_up == null ? "pending" : m.is_up ? "up" : "down"}"></span> ${m.name}</h1>
+        <p class="mono">${targetIdentifier(m)}</p>
+        ${tagPillsHtml(m.tags, "goToTag")}
+        <script>function goToTag(tag) { location.href = "/?" + new URLSearchParams({ q: tag }); }</script>
 
         <div class="cards">
-            <div class="card"><div class="label">Current status</div><div class="value" style="color: var(${m.is_up ? "--success-fg" : "--danger-fg"})">${m.is_up ? "Up" : "Down"}</div><div class="mono">${m.stateSince != null ? `since ${timeAgo(m.stateSince)}` : ""}</div></div>
+            <div class="card"><div class="label">Current status</div><div class="value" style="color: ${m.is_up == null ? "var(--fg-muted)" : `var(${m.is_up ? "--success-fg" : "--danger-fg"})`}">${m.is_up == null ? "Pending" : m.is_up ? "Up" : "Down"}</div><div class="mono">${m.stateSince != null ? `since ${timeAgo(m.stateSince)}` : ""}</div></div>
             <div class="card"><div class="label">Last check</div><div class="value">${timeAgo(m.checked_at)}</div><div class="mono">checked every 1m</div></div>
             <div class="card"><div class="label">24h uptime</div><div class="value">${pct(m.uptime24h.pct)}</div><div class="mono">${m.incidents24h.count} incidents, ${duration(m.incidents24h.totalDownMs)} down</div></div>
             <div class="card"><div class="label">7d uptime</div><div class="value">${pct(m.uptime7d.pct)}</div><div class="mono">${m.incidents7d.count} incidents, ${duration(m.incidents7d.totalDownMs)} down</div></div>
@@ -258,16 +315,53 @@ export function renderAdminPage() {
             </div>
         </div>
 
+        <div class="search-box"><input id="search" placeholder="Search by name, host, tag, or notes..." oninput="renderTargets()"></div>
         <div class="Box" id="targets-box"></div>
 
         <h2 class="section-title">Add monitor</h2>
         <div class="Box" style="padding:16px">
             <div class="form-row">
                 <div class="field grow"><label>Name</label><input id="new-name" placeholder="e.g. Shenzhen - forward (443)" /></div>
-                <div class="field grow"><label>Host</label><input id="new-host" placeholder="e.g. shenzhen.1000600.xyz" /></div>
-                <div class="field port"><label>Port</label><input id="new-port" placeholder="443" type="number" /></div>
-                <button class="primary" onclick="addTarget()">Add monitor</button>
+                <div class="field" style="flex:0 0 140px">
+                    <label>Type</label>
+                    <select id="new-type" onchange="onTypeChange('new', this.value)">
+                        <option value="port">Port (TCP)</option>
+                        <option value="http">HTTP</option>
+                        <option value="dns">DNS</option>
+                    </select>
+                </div>
             </div>
+            <div id="new-fields-port" class="form-row" style="margin-top:8px">
+                <div class="field grow"><label>Host</label><input id="new-port-host" placeholder="e.g. shenzhen.1000600.xyz" /></div>
+                <div class="field port"><label>Port</label><input id="new-port-num" placeholder="443" type="number" /></div>
+            </div>
+            <div id="new-fields-http" class="form-row" style="margin-top:8px; display:none">
+                <div class="field grow"><label>URL</label><input id="new-http-url" placeholder="https://example.com/health" /></div>
+                <div class="field grow"><label>Expected status</label><input id="new-expectedStatus" placeholder="optional, e.g. 200" /></div>
+                <div class="field grow"><label>Keyword</label><input id="new-keyword" placeholder="optional, text that must appear" /></div>
+            </div>
+            <div id="new-fields-dns" class="form-row" style="margin-top:8px; display:none">
+                <div class="field grow"><label>Hostname</label><input id="new-dns-hostname" placeholder="example.com" /></div>
+                <div class="field" style="flex:0 0 110px">
+                    <label>Record type</label>
+                    <select id="new-recordType"><option>A</option><option>AAAA</option><option>CNAME</option></select>
+                </div>
+                <div class="field grow"><label>Expected value</label><input id="new-expectedValue" placeholder="optional, e.g. 1.2.3.4" /></div>
+            </div>
+            <div class="form-row" style="margin-top:8px">
+                <div class="field grow"><label>Tags</label><input id="new-tags" placeholder="comma-separated, e.g. singapore, production" /></div>
+            </div>
+            <div class="field" style="margin-top:8px">
+                <label>Notes (admin-only, never public)</label>
+                <div class="fmt-toolbar">
+                    <button type="button" style="font-weight:700" onclick="wrapSelection('new-notes','**')">B</button>
+                    <button type="button" style="font-style:italic" onclick="wrapSelection('new-notes','*')">I</button>
+                    <button type="button" style="text-decoration:underline" onclick="wrapSelection('new-notes','__')">U</button>
+                    <button type="button" style="text-decoration:line-through" onclick="wrapSelection('new-notes','~~')">S</button>
+                </div>
+                <textarea id="new-notes" rows="4" placeholder="what this is for -- bold/italic/underline/strikethrough via the buttons above"></textarea>
+            </div>
+            <div style="margin-top:8px"><button class="primary" onclick="addTarget()">Add monitor</button></div>
         </div>
 
         <footer><a href="/">&larr; Status page</a></footer>
@@ -294,6 +388,15 @@ export function renderAdminPage() {
                 throw new Error("unauthorized");
             }
             if (res.status === 204) return null;
+            if (!res.ok) {
+                let message = res.status + " " + res.statusText;
+                try {
+                    const body = await res.json();
+                    if (body && body.error) message = body.error;
+                } catch {}
+                alert("Error: " + message);
+                throw new Error(message);
+            }
             return res.json();
         }
 
@@ -305,14 +408,57 @@ export function renderAdminPage() {
             if (s < 86400) return Math.floor(s / 3600) + "h ago";
             return Math.floor(s / 86400) + "d ago";
         }
+        function tagPills(tagsString) {
+            const tags = (tagsString || "").split(",").map((s) => s.trim()).filter(Boolean);
+            if (!tags.length) return "";
+            return '<div>' + tags.map((t) => \`<span class="tag-pill" onclick="filterByTag('\${t.replace(/'/g, "\\\\'")}')">\${t}</span>\`).join("") + '</div>';
+        }
+        function targetIdentifier(t) {
+            if (t.type === "http") return t.host;
+            if (t.type === "dns") return t.host + " (" + ((t.config && t.config.recordType) || "A") + " record)";
+            return t.host + ":" + t.port;
+        }
+
+        // Notes are stored as plain text with lightweight markers (**bold**,
+        // *italic*, __underline__, ~~strikethrough~~) rather than raw HTML --
+        // escape first, then apply the markers, so pasted/typed text can never
+        // inject real markup.
+        function escapeHtml(s) {
+            return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+        function renderNotesHtml(text) {
+            let s = escapeHtml(text || "");
+            s = s.replace(/\\*\\*(.+?)\\*\\*/g, "<strong>$1</strong>");
+            s = s.replace(/\\*(.+?)\\*/g, "<em>$1</em>");
+            s = s.replace(/__(.+?)__/g, "<u>$1</u>");
+            s = s.replace(/~~(.+?)~~/g, "<del>$1</del>");
+            return s.replace(/\\n/g, "<br>");
+        }
+        function wrapSelection(textareaId, marker) {
+            const ta = document.getElementById(textareaId);
+            const start = ta.selectionStart, end = ta.selectionEnd;
+            const selected = ta.value.slice(start, end) || "text";
+            ta.value = ta.value.slice(0, start) + marker + selected + marker + ta.value.slice(end);
+            ta.focus();
+            ta.selectionStart = start + marker.length;
+            ta.selectionEnd = start + marker.length + selected.length;
+        }
+        function toggleNotes(id) {
+            const el = document.getElementById("notes-full-" + id);
+            if (el) el.style.display = el.style.display === "none" ? "block" : "none";
+        }
         function viewRow(t) {
-            const dotClass = t.paused ? "paused" : (t.is_up ? "up" : "down");
-            const stateText = t.paused ? "Paused" : (t.is_up ? "Up" : "Down") + " \\u00b7 " + timeAgo(t.checked_at);
+            const dotClass = t.paused ? "paused" : (t.is_up == null ? "pending" : (t.is_up ? "up" : "down"));
+            const stateText = t.paused ? "Paused" : (t.is_up == null ? "Pending first check" : (t.is_up ? "Up" : "Down") + " \\u00b7 " + timeAgo(t.checked_at));
+            const notesPreview = (t.notes || "").replace(/\\s+/g, " ").slice(0, 100);
             return \`<div class="Box-row" data-id="\${t.id}">
                 <span class="dot \${dotClass}"></span>
                 <div class="grow">
                     <strong>\${t.name}</strong>
-                    <div class="mono">\${t.host}:\${t.port}</div>
+                    <div class="mono">\${targetIdentifier(t)}</div>
+                    \${tagPills(t.tags)}
+                    \${t.notes ? \`<div class="notes-snippet" onclick="toggleNotes(\${t.id})">\${notesPreview}\${t.notes.length > 100 ? "…" : ""}</div>
+                    <div class="notes-full" id="notes-full-\${t.id}" style="display:none">\${renderNotesHtml(t.notes)}</div>\` : ""}
                 </div>
                 <div class="mono" style="min-width:130px">\${stateText}</div>
                 <div class="actions">
@@ -325,11 +471,60 @@ export function renderAdminPage() {
         }
 
         function editRow(t) {
+            const notesId = "edit-notes-" + t.id;
+            const prefix = "edit-" + t.id;
+            const type = t.type || "port";
+            const cfg = t.config || {};
+            const dispPort = type === "port" ? (t.host || "") : "";
+            const dispHttp = type === "http" ? (t.host || "") : "";
+            const dispDns = type === "dns" ? (t.host || "") : "";
             return \`<div class="Box-row" data-id="\${t.id}">
-                <div class="form-row grow">
-                    <div class="field grow"><label>Name</label><input value="\${t.name}" data-field="name" /></div>
-                    <div class="field grow"><label>Host</label><input value="\${t.host}" data-field="host" /></div>
-                    <div class="field port"><label>Port</label><input value="\${t.port}" data-field="port" type="number" /></div>
+                <div class="grow">
+                    <div class="form-row">
+                        <div class="field grow"><label>Name</label><input value="\${t.name}" data-field="name" /></div>
+                        <div class="field" style="flex:0 0 140px">
+                            <label>Type</label>
+                            <select data-field="type" onchange="onTypeChange('\${prefix}', this.value)">
+                                <option value="port" \${type === "port" ? "selected" : ""}>Port (TCP)</option>
+                                <option value="http" \${type === "http" ? "selected" : ""}>HTTP</option>
+                                <option value="dns" \${type === "dns" ? "selected" : ""}>DNS</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="\${prefix}-fields-port" class="form-row" style="margin-top:8px; display:\${type === "port" ? "" : "none"}">
+                        <div class="field grow"><label>Host</label><input value="\${dispPort}" data-field="port-host" /></div>
+                        <div class="field port"><label>Port</label><input value="\${type === "port" ? t.port : ""}" data-field="port-num" type="number" /></div>
+                    </div>
+                    <div id="\${prefix}-fields-http" class="form-row" style="margin-top:8px; display:\${type === "http" ? "" : "none"}">
+                        <div class="field grow"><label>URL</label><input value="\${dispHttp}" data-field="http-url" /></div>
+                        <div class="field grow"><label>Expected status</label><input value="\${cfg.expectedStatus || ""}" data-field="expectedStatus" placeholder="optional" /></div>
+                        <div class="field grow"><label>Keyword</label><input value="\${cfg.keyword || ""}" data-field="keyword" placeholder="optional" /></div>
+                    </div>
+                    <div id="\${prefix}-fields-dns" class="form-row" style="margin-top:8px; display:\${type === "dns" ? "" : "none"}">
+                        <div class="field grow"><label>Hostname</label><input value="\${dispDns}" data-field="dns-hostname" /></div>
+                        <div class="field" style="flex:0 0 110px">
+                            <label>Record type</label>
+                            <select data-field="recordType">
+                                <option \${(cfg.recordType || "A") === "A" ? "selected" : ""}>A</option>
+                                <option \${cfg.recordType === "AAAA" ? "selected" : ""}>AAAA</option>
+                                <option \${cfg.recordType === "CNAME" ? "selected" : ""}>CNAME</option>
+                            </select>
+                        </div>
+                        <div class="field grow"><label>Expected value</label><input value="\${cfg.expectedValue || ""}" data-field="expectedValue" placeholder="optional" /></div>
+                    </div>
+                    <div class="form-row" style="margin-top:8px">
+                        <div class="field grow"><label>Tags</label><input value="\${t.tags || ""}" data-field="tags" placeholder="comma-separated" /></div>
+                    </div>
+                    <div class="field" style="margin-top:8px">
+                        <label>Notes</label>
+                        <div class="fmt-toolbar">
+                            <button type="button" style="font-weight:700" onclick="wrapSelection('\${notesId}','**')">B</button>
+                            <button type="button" style="font-style:italic" onclick="wrapSelection('\${notesId}','*')">I</button>
+                            <button type="button" style="text-decoration:underline" onclick="wrapSelection('\${notesId}','__')">U</button>
+                            <button type="button" style="text-decoration:line-through" onclick="wrapSelection('\${notesId}','~~')">S</button>
+                        </div>
+                        <textarea id="\${notesId}" data-field="notes" rows="4">\${escapeHtml(t.notes || "")}</textarea>
+                    </div>
                 </div>
                 <div class="actions">
                     <button class="primary" onclick="saveEdit(\${t.id})">Save</button>
@@ -338,10 +533,31 @@ export function renderAdminPage() {
             </div>\`;
         }
 
+        function onTypeChange(prefix, type) {
+            ["port", "http", "dns"].forEach((t) => {
+                const el = document.getElementById(prefix + "-fields-" + t);
+                if (el) el.style.display = (t === type) ? "" : "none";
+            });
+        }
+
+        function matchesSearch(t, q) {
+            if (!q) return true;
+            const haystack = [t.name, t.host, t.tags, t.notes].filter(Boolean).join(" ").toLowerCase();
+            return haystack.includes(q);
+        }
+
         function renderTargets() {
+            const q = (document.getElementById("search")?.value || "").trim().toLowerCase();
+            const visible = targets.filter((t) => matchesSearch(t, q));
             document.getElementById("targets-box").innerHTML =
-                targets.map((t) => t.id === editingId ? editRow(t) : viewRow(t)).join("")
-                || '<div class="Box-row mono">No monitors yet -- add one below.</div>';
+                visible.map((t) => t.id === editingId ? editRow(t) : viewRow(t)).join("")
+                || (targets.length
+                    ? '<div class="Box-row mono">No monitors match your search.</div>'
+                    : '<div class="Box-row mono">No monitors yet -- add one below.</div>');
+        }
+        function filterByTag(tag) {
+            document.getElementById("search").value = tag;
+            renderTargets();
         }
 
         async function loadTargets() {
@@ -352,13 +568,40 @@ export function renderAdminPage() {
         }
         function startEdit(id) { editingId = id; renderTargets(); }
         function cancelEdit() { editingId = null; renderTargets(); }
+        // Builds the {name, type, host, port, tags, notes, config} payload
+        // from whichever fields are relevant to the selected type. get(field)
+        // abstracts over "look up by id" (add form) vs "look up by data-field
+        // within this row" (edit row) so both call sites share this logic.
+        function buildPayload(get) {
+            const type = get("type") || "port";
+            const name = get("name");
+            const tags = get("tags");
+            const notes = get("notes");
+            let host, port = 0, config = null;
+            if (type === "http") {
+                host = get("http-url");
+                config = {};
+                if (get("expectedStatus")) config.expectedStatus = get("expectedStatus");
+                if (get("keyword")) config.keyword = get("keyword");
+            } else if (type === "dns") {
+                host = get("dns-hostname");
+                config = { recordType: get("recordType") || "A" };
+                if (get("expectedValue")) config.expectedValue = get("expectedValue");
+            } else {
+                host = get("port-host");
+                port = Number(get("port-num")) || 0;
+            }
+            return { name, type, host, port, tags, notes, config };
+        }
+
         async function saveEdit(id) {
             const row = document.querySelector(\`[data-id="\${id}"]\`);
-            const body = {
-                name: row.querySelector('[data-field="name"]').value,
-                host: row.querySelector('[data-field="host"]').value,
-                port: Number(row.querySelector('[data-field="port"]').value),
+            const get = (field) => {
+                const el = row.querySelector(\`[data-field="\${field}"]\`);
+                return el ? el.value : "";
             };
+            const body = buildPayload(get);
+            if (!body.name || !body.host) return alert("name and host/URL/hostname are required");
             await api(\`/admin/api/targets/\${id}\`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
             editingId = null;
             loadTargets();
@@ -378,16 +621,19 @@ export function renderAdminPage() {
             loadTargets();
         }
         async function addTarget() {
-            const body = {
-                name: document.getElementById("new-name").value,
-                host: document.getElementById("new-host").value,
-                port: Number(document.getElementById("new-port").value),
+            const get = (field) => {
+                const el = document.getElementById("new-" + field);
+                return el ? el.value : "";
             };
-            if (!body.name || !body.host || !body.port) return alert("name, host, and port are required");
+            const body = buildPayload(get);
+            if (!body.name || !body.host) return alert("name and host/URL/hostname are required");
             await api("/admin/api/targets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-            document.getElementById("new-name").value = "";
-            document.getElementById("new-host").value = "";
-            document.getElementById("new-port").value = "";
+            ["name", "type", "port-host", "port-num", "http-url", "expectedStatus", "keyword", "dns-hostname", "expectedValue", "tags", "notes"].forEach((field) => {
+                const el = document.getElementById("new-" + field);
+                if (el) el.value = "";
+            });
+            document.getElementById("new-type").value = "port";
+            onTypeChange("new", "port");
             loadTargets();
         }
         if (!getToken()) document.getElementById("auth-box").style.display = "block";

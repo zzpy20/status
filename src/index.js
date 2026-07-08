@@ -1,9 +1,10 @@
-import { checkPort } from "./checker.js";
+import { runCheck } from "./checker.js";
 import * as db from "./db.js";
 import { renderStatusPage, renderDetailPage, renderAdminPage } from "./render.js";
 import { handleAdminApi } from "./admin.js";
 import { notifyAll } from "./notify.js";
 import { formatBrisbaneTime } from "./time.js";
+import { targetIdentifier } from "./identifier.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 const WEEK = 7 * DAY;
@@ -13,7 +14,7 @@ async function notifyStateChange(env, target, isUp) {
     const monitorUrl = `${env.PUBLIC_BASE_URL || ""}/monitor/${target.id}`;
     await notifyAll(env, {
         target, isUp, monitorUrl,
-        text: `${target.name}: ${isUp ? "back up" : "DOWN"}\n${target.host}:${target.port} -- ${formatBrisbaneTime()}`,
+        text: `${target.name}: ${isUp ? "back up" : "DOWN"}\n${targetIdentifier(target)} -- ${formatBrisbaneTime()}`,
     });
 }
 
@@ -23,7 +24,7 @@ async function runChecks(env) {
     for (const target of targets) {
         try {
             const previous = await db.lastCheck(env.DB, target.id);
-            const { isUp, latencyMs } = await checkPort(target.host, target.port);
+            const { isUp, latencyMs } = await runCheck(target);
             await db.insertCheck(env.DB, target, isUp, latencyMs);
 
             if (previous && previous.is_up !== (isUp ? 1 : 0)) {
@@ -60,7 +61,7 @@ async function buildDetailData(env, id) {
     if (!t) return null;
     const now = Date.now();
     const last = await db.lastCheck(env.DB, id);
-    const isUp = last ? last.is_up === 1 : false;
+    const isUp = last ? last.is_up === 1 : null;
 
     const [uptime24h, uptime7d, uptime30d, incidents24h, incidents7d, incidents30d, latency24h, latencySeries, stateSince] = await Promise.all([
         db.uptimeStats(env.DB, id, now - DAY),
@@ -75,12 +76,18 @@ async function buildDetailData(env, id) {
     ]);
 
     return {
-        id: t.id, name: t.name, host: t.host, port: t.port,
+        id: t.id, name: t.name, type: t.type, host: t.host, port: t.port, config: t.config, tags: t.tags,
         is_up: isUp, checked_at: last ? last.checked_at : null, stateSince,
         uptime24h, uptime7d, uptime30d,
         incidents24h, incidents7d, incidents30d,
         latency24h, latencySeries,
     };
+}
+
+// notes are for the admin's own recall and never exposed on public routes
+// (the status page, /api/status, /monitor/:id) -- only via /admin/api/*.
+function stripNotes(rows) {
+    return rows.map(({ notes, ...rest }) => rest);
 }
 
 export default {
@@ -92,12 +99,12 @@ export default {
         const url = new URL(request.url);
 
         if (url.pathname === "/") {
-            const rows = await db.statusRows(env.DB);
+            const rows = stripNotes(await db.statusRows(env.DB));
             return new Response(renderStatusPage(rows), { headers: { "content-type": "text/html; charset=utf-8" } });
         }
 
         if (url.pathname === "/api/status") {
-            return Response.json(await db.statusRows(env.DB));
+            return Response.json(stripNotes(await db.statusRows(env.DB)));
         }
 
         if (url.pathname.startsWith("/monitor/")) {

@@ -1,4 +1,5 @@
 import { formatBrisbaneTime } from "./time.js";
+import { targetIdentifier } from "./identifier.js";
 
 function emailHtml({ target, isUp, monitorUrl }) {
     const stateWord = isUp ? "up" : "down";
@@ -20,8 +21,8 @@ function emailHtml({ target, isUp, monitorUrl }) {
             <div style="font-size:14px;font-weight:600">${target.name}</div>
         </td></tr>
         <tr><td style="padding:12px 16px;border-bottom:1px solid #d8dee4">
-            <div style="font-size:12px;color:#656d76;text-transform:uppercase">Checked host:port</div>
-            <div style="font-size:14px;font-weight:600;font-family:ui-monospace,monospace">${target.host}:${target.port}</div>
+            <div style="font-size:12px;color:#656d76;text-transform:uppercase">Checked</div>
+            <div style="font-size:14px;font-weight:600;font-family:ui-monospace,monospace">${targetIdentifier(target)}</div>
         </td></tr>
         <tr><td style="padding:12px 16px">
             <div style="font-size:12px;color:#656d76;text-transform:uppercase">Time</div>

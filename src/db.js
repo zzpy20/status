@@ -1,6 +1,13 @@
 const DAY = 24 * 60 * 60 * 1000;
 const WEEK = 7 * DAY;
 
+function parseTarget(row) {
+    if (!row) return row;
+    let config = {};
+    try { config = row.config ? JSON.parse(row.config) : {}; } catch { config = {}; }
+    return { ...row, config };
+}
+
 // Shared by the public status page/API and the admin UI, so both always
 // show the same real up/down state -- the admin list previously only knew
 // about paused/not-paused and never looked at actual check results.
@@ -17,10 +24,14 @@ export async function statusRows(db) {
         return {
             id: t.id,
             name: t.name,
+            type: t.type,
             host: t.host,
             port: t.port,
+            config: t.config,
             paused: t.paused,
-            is_up: last ? last.is_up === 1 : false,
+            tags: t.tags,
+            notes: t.notes,
+            is_up: last ? last.is_up === 1 : null,
             checked_at: last ? last.checked_at : null,
             uptime_24h: uptime24h.pct,
             uptime_7d: uptime7d.pct,
@@ -34,24 +45,24 @@ export async function listTargets(db, { includePaused = true } = {}) {
         ? "SELECT * FROM targets ORDER BY id"
         : "SELECT * FROM targets WHERE paused = 0 ORDER BY id";
     const { results } = await db.prepare(sql).all();
-    return results;
+    return results.map(parseTarget);
 }
 
 export async function getTarget(db, id) {
-    return db.prepare("SELECT * FROM targets WHERE id = ?").bind(id).first();
+    return parseTarget(await db.prepare("SELECT * FROM targets WHERE id = ?").bind(id).first());
 }
 
-export async function createTarget(db, { name, host, port }) {
+export async function createTarget(db, { name, host, port, type, tags, notes, config }) {
     const { meta } = await db.prepare(
-        "INSERT INTO targets (name, host, port, paused, created_at) VALUES (?, ?, ?, 0, ?)"
-    ).bind(name, host, port, Date.now()).run();
+        "INSERT INTO targets (name, host, port, type, paused, tags, notes, config, created_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)"
+    ).bind(name, host, port || 0, type || "port", tags || null, notes || null, config ? JSON.stringify(config) : null, Date.now()).run();
     return getTarget(db, meta.last_row_id);
 }
 
-export async function updateTarget(db, id, { name, host, port }) {
+export async function updateTarget(db, id, { name, host, port, type, tags, notes, config }) {
     await db.prepare(
-        "UPDATE targets SET name = ?, host = ?, port = ? WHERE id = ?"
-    ).bind(name, host, port, id).run();
+        "UPDATE targets SET name = ?, host = ?, port = ?, type = ?, tags = ?, notes = ?, config = ? WHERE id = ?"
+    ).bind(name, host, port || 0, type || "port", tags || null, notes || null, config ? JSON.stringify(config) : null, id).run();
     return getTarget(db, id);
 }
 
