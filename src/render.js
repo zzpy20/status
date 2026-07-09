@@ -139,12 +139,13 @@ const BASE_STYLE = `
     button.link:hover { text-decoration: underline; background: none; }
     button + button { margin-left: 4px; }
 
-    input {
+    input:not([type="checkbox"]) {
         background: var(--canvas-default); color: var(--fg-default);
         border: 1px solid var(--border-default); border-radius: 6px;
         padding: 5px 12px; line-height: 20px; width: 100%;
     }
-    input:focus { border-color: var(--accent-fg); outline: none; box-shadow: 0 0 0 3px rgba(9,105,218,0.2); }
+    input:not([type="checkbox"]):focus { border-color: var(--accent-fg); outline: none; box-shadow: 0 0 0 3px rgba(9,105,218,0.2); }
+    input[type="checkbox"] { width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--accent-fg); }
 
     .field { display: flex; flex-direction: column; gap: 4px; }
     .field label { font-size: 12px; font-weight: 600; color: var(--fg-muted); }
@@ -155,7 +156,15 @@ const BASE_STYLE = `
     .grow { flex: 1 1 auto; min-width: 0; }
     .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-    .search-box { margin-bottom: 12px; }
+    .search-box { margin-bottom: 12px; position: relative; }
+    .search-box input { padding-right: 32px; }
+    .search-clear {
+        display: none; position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+        width: 20px; height: 20px; align-items: center; justify-content: center;
+        color: var(--fg-muted); cursor: pointer; font-size: 16px; line-height: 1; user-select: none; border-radius: 4px;
+    }
+    .search-clear:hover { color: var(--fg-default); background: var(--btn-hover-bg); }
+    .search-clear.visible { display: flex; }
     .toolbar-row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
     .toolbar-row .search-box { flex: 1 1 auto; margin-bottom: 0; }
 
@@ -271,13 +280,19 @@ export function renderStatusPage(rows) {
     return pageShell("status", `
         ${navRow("status")}
         <h1 class="page-title">Status</h1>
-        <div class="search-box"><input id="search" placeholder="Search by name, host, or tag..." oninput="filterRows()"></div>
+        <div class="search-box"><input id="search" placeholder="Search by name, host, or tag..." oninput="filterRows()"><span class="search-clear" id="search-clear" onclick="clearSearch()">&times;</span></div>
         <div class="Box" id="rows-box">${headerRow}${items}</div>
         <p id="no-results" class="mono" style="display:none">No monitors match your search.</p>
         <footer>Checked every minute via Cloudflare Workers Cron Triggers + D1</footer>
         <script>
+        function clearSearch() {
+            document.getElementById("search").value = "";
+            filterRows();
+            document.getElementById("search").focus();
+        }
         function filterRows() {
             const q = document.getElementById("search").value.trim().toLowerCase();
+            document.getElementById("search-clear").classList.toggle("visible", q.length > 0);
             const rows = document.querySelectorAll("#rows-box .Box-row:not(.header-row)");
             let visible = 0;
             rows.forEach((row) => {
@@ -373,7 +388,7 @@ export function renderIncidentsPage(incidents) {
     return pageShell("incidents", `
         ${navRow("incidents")}
         <h1 class="page-title">Incidents</h1>
-        <div class="search-box"><input id="search" placeholder="Search by monitor name..." oninput="filterIncidentRows()"></div>
+        <div class="search-box"><input id="search" placeholder="Search by monitor name..." oninput="filterIncidentRows()"><span class="search-clear" id="search-clear" onclick="clearSearch()">&times;</span></div>
         <div class="Box">
             <table>
                 <thead><tr><th>Status</th><th>Monitor</th><th>Root Cause</th><th>Started</th><th>Resolved</th><th>Duration</th></tr></thead>
@@ -383,8 +398,14 @@ export function renderIncidentsPage(incidents) {
         <p id="no-results" class="mono" style="display:none">No incidents match your search.</p>
         <footer>Showing the most recent ${incidents.length} incident${incidents.length === 1 ? "" : "s"} across all monitors</footer>
         <script>
+        function clearSearch() {
+            document.getElementById("search").value = "";
+            filterIncidentRows();
+            document.getElementById("search").focus();
+        }
         function filterIncidentRows() {
             const q = document.getElementById("search").value.trim().toLowerCase();
+            document.getElementById("search-clear").classList.toggle("visible", q.length > 0);
             const rows = document.querySelectorAll("#rows-body tr");
             let visible = 0;
             rows.forEach((row) => {
@@ -413,7 +434,7 @@ export function renderAdminPage() {
         </div>
 
         <div class="toolbar-row">
-            <div class="search-box"><input id="search" placeholder="Search by name, host, tag, or notes..." oninput="renderTargets()"></div>
+            <div class="search-box"><input id="search" placeholder="Search by name, host, tag, or notes..." oninput="renderTargets()"><span class="search-clear" id="search-clear" onclick="clearSearch()">&times;</span></div>
             <button class="primary" onclick="openAddModal()">+ Add monitor</button>
         </div>
         <div id="bulk-toolbar" class="Box" style="display:none; padding:10px 16px; margin-bottom:12px; align-items:center; gap:8px; flex-wrap:wrap;">
@@ -600,12 +621,14 @@ export function renderAdminPage() {
 
         const targetsHeaderRow = '<div class="Box-row header-row">' +
             '<input type="checkbox" id="select-all" onchange="toggleSelectAll(this.checked)" />' +
+            '<span style="width:8px"></span>' +
             '<div class="grow">Monitor</div>' +
             '<div style="min-width:130px">Status</div>' +
             '<div class="actions" style="margin-left:0">Actions</div>' +
             '</div>';
         function renderTargets() {
             const q = (document.getElementById("search")?.value || "").trim().toLowerCase();
+            document.getElementById("search-clear").classList.toggle("visible", q.length > 0);
             const visible = targets.filter((t) => matchesSearch(t, q));
             document.getElementById("targets-box").innerHTML = targetsHeaderRow + (
                 visible.map((t) => viewRow(t)).join("")
@@ -613,6 +636,11 @@ export function renderAdminPage() {
                     ? '<div class="Box-row mono">No monitors match your search.</div>'
                     : '<div class="Box-row mono">No monitors yet -- add one below.</div>')
             );
+        }
+        function clearSearch() {
+            document.getElementById("search").value = "";
+            renderTargets();
+            document.getElementById("search").focus();
         }
         function filterByTag(tag) {
             document.getElementById("search").value = tag;
