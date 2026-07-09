@@ -6,6 +6,11 @@ import { notifyAll } from "./notify.js";
 import { formatBrisbaneTime } from "./time.js";
 import { targetIdentifier } from "./identifier.js";
 
+// no-store on every HTML response -- this bit us twice already (Reset,
+// then the detail-page nav fix) where a browser/mobile-Safari cached page
+// looked like a real bug because the deployed fix wasn't actually loading.
+const HTML_HEADERS = { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" };
+
 const DAY = 24 * 60 * 60 * 1000;
 const WEEK = 7 * DAY;
 const MONTH = 30 * DAY;
@@ -100,7 +105,7 @@ export default {
 
         if (url.pathname === "/") {
             const rows = stripNotes(await db.statusRows(env.DB));
-            return new Response(renderStatusPage(rows), { headers: { "content-type": "text/html; charset=utf-8" } });
+            return new Response(renderStatusPage(rows), { headers: HTML_HEADERS });
         }
 
         if (url.pathname === "/api/status") {
@@ -111,16 +116,16 @@ export default {
             const id = Number(url.pathname.split("/")[2]);
             const data = await buildDetailData(env, id);
             if (!data) return new Response("Not found", { status: 404 });
-            return new Response(renderDetailPage(data), { headers: { "content-type": "text/html; charset=utf-8" } });
+            return new Response(renderDetailPage(data), { headers: HTML_HEADERS });
         }
 
         if (url.pathname === "/incidents") {
             const incidents = await db.allIncidents(env.DB);
-            return new Response(renderIncidentsPage(incidents), { headers: { "content-type": "text/html; charset=utf-8" } });
+            return new Response(renderIncidentsPage(incidents), { headers: HTML_HEADERS });
         }
 
         if (url.pathname === "/admin") {
-            return new Response(renderAdminPage(), { headers: { "content-type": "text/html; charset=utf-8" } });
+            return new Response(renderAdminPage(), { headers: HTML_HEADERS });
         }
 
         if (url.pathname.startsWith("/admin/api/")) {

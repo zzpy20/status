@@ -155,6 +155,17 @@ const BASE_STYLE = `
     .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     .search-box { margin-bottom: 12px; }
+    .toolbar-row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+    .toolbar-row .search-box { flex: 1 1 auto; margin-bottom: 0; }
+
+    .modal-backdrop {
+        display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+        align-items: flex-start; justify-content: center; padding: 40px 16px; overflow-y: auto; z-index: 100;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal { background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 8px; max-width: 640px; width: 100%; padding: 20px; }
+    .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .modal-header h2 { font-size: 16px; font-weight: 600; margin: 0; }
     .tag-pill {
         display: inline-block; background: var(--btn-bg); border: 1px solid var(--btn-border);
         border-radius: 12px; padding: 1px 8px; font-size: 11px; color: var(--fg-muted);
@@ -173,6 +184,20 @@ const BASE_STYLE = `
         resize: vertical; min-height: 38px;
     }
     textarea:focus { border-color: var(--accent-fg); outline: none; box-shadow: 0 0 0 3px rgba(9,105,218,0.2); }
+
+    .Box { overflow-x: auto; }
+
+    @media (max-width: 640px) {
+        body { padding: 20px 12px; }
+        .Box-row { flex-direction: column; align-items: flex-start; gap: 6px; }
+        .Box-row .actions { margin-left: 0; flex-wrap: wrap; width: 100%; }
+        .toolbar-row { flex-direction: column; align-items: stretch; }
+        .toolbar-row button { width: 100%; }
+        .form-row { flex-direction: column; align-items: stretch; }
+        .form-row .field, .form-row .field.port { flex: 1 1 auto; }
+        .modal { padding: 16px; }
+        .cards { grid-template-columns: 1fr 1fr; }
+    }
 `;
 
 function pageShell(title, bodyHtml) {
@@ -369,11 +394,18 @@ export function renderAdminPage() {
             </div>
         </div>
 
-        <div class="search-box"><input id="search" placeholder="Search by name, host, tag, or notes..." oninput="renderTargets()"></div>
+        <div class="toolbar-row">
+            <div class="search-box"><input id="search" placeholder="Search by name, host, tag, or notes..." oninput="renderTargets()"></div>
+            <button class="primary" onclick="openAddModal()">+ Add monitor</button>
+        </div>
         <div class="Box" id="targets-box"></div>
 
-        <h2 class="section-title">Add monitor</h2>
-        <div class="Box" style="padding:16px">
+        <div class="modal-backdrop" id="add-modal-backdrop" onclick="if (event.target === this) closeAddModal()">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Add monitor</h2>
+                <button class="link" onclick="closeAddModal()">Close</button>
+            </div>
             <div class="form-row">
                 <div class="field grow"><label>Name</label><input id="new-name" placeholder="e.g. Shenzhen - forward (443)" /></div>
                 <div class="field" style="flex:0 0 140px">
@@ -415,7 +447,8 @@ export function renderAdminPage() {
                 </div>
                 <textarea id="new-notes" rows="4" placeholder="what this is for -- bold/italic/underline/strikethrough via the buttons above"></textarea>
             </div>
-            <div style="margin-top:8px"><button class="primary" onclick="addTarget()">Add monitor</button></div>
+            <div style="margin-top:16px"><button class="primary" onclick="addTarget()">Add monitor</button></div>
+        </div>
         </div>
 
         <script>
@@ -678,6 +711,10 @@ export function renderAdminPage() {
             await api(\`/admin/api/targets/\${id}\`, { method: "DELETE" });
             loadTargets();
         }
+        function openAddModal() { document.getElementById("add-modal-backdrop").classList.add("open"); }
+        function closeAddModal() { document.getElementById("add-modal-backdrop").classList.remove("open"); }
+        document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeAddModal(); });
+
         async function addTarget() {
             const get = (field) => {
                 const el = document.getElementById("new-" + field);
@@ -692,6 +729,7 @@ export function renderAdminPage() {
             });
             document.getElementById("new-type").value = "port";
             onTypeChange("new", "port");
+            closeAddModal();
             loadTargets();
         }
         if (!getToken()) document.getElementById("auth-box").style.display = "block";
