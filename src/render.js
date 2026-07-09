@@ -97,6 +97,7 @@ const BASE_STYLE = `
     .Box-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border-muted); }
     .Box-row:last-child { border-bottom: none; }
     .Box-header { padding: 12px 16px; border-bottom: 1px solid var(--border-muted); font-weight: 600; font-size: 14px; }
+    .Box-row.header-row { color: var(--fg-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.02em; border-bottom: 1px solid var(--border-default); }
 
     table { border-collapse: collapse; width: 100%; }
     th, td { text-align: left; padding: 14px 16px; font-size: 14px; }
@@ -197,6 +198,7 @@ const BASE_STYLE = `
         .form-row .field, .form-row .field.port { flex: 1 1 auto; }
         .modal { padding: 16px; }
         .cards { grid-template-columns: 1fr 1fr; }
+        .header-row { display: none; }
     }
 `;
 
@@ -236,7 +238,22 @@ function tagPillsHtml(tagsString, onclick) {
     return `<div>${tags.map((t) => `<span class="tag-pill" onclick="${onclick}('${t.replace(/'/g, "\\'")}')">${t}</span>`).join("")}</div>`;
 }
 
+function statusHtml(paused, isUp, checkedAt) {
+    if (paused) return "Paused";
+    if (isUp == null) return "Pending first check";
+    return `<span class="status-badge ${isUp ? "up" : "down"}">${isUp ? "Up" : "Down"}</span> &middot; ${timeAgo(checkedAt)}`;
+}
+
 export function renderStatusPage(rows) {
+    const headerRow = `
+        <div class="Box-row header-row">
+            <span style="width:8px"></span>
+            <div class="grow">Monitor</div>
+            <div style="min-width:110px">Status</div>
+            <div style="min-width:70px">24h</div>
+            <div style="min-width:70px">7d</div>
+            <div style="min-width:90px">Last down</div>
+        </div>`;
     const items = rows.map((r) => `
         <div class="Box-row" data-search="${(r.name + " " + r.host + " " + (r.tags || "")).toLowerCase()}">
             <span class="dot ${r.paused ? "paused" : r.is_up == null ? "pending" : r.is_up ? "up" : "down"}"></span>
@@ -245,7 +262,7 @@ export function renderStatusPage(rows) {
                 <div class="mono">${targetIdentifier(r)}</div>
                 ${tagPillsHtml(r.tags, "filterByTag")}
             </div>
-            <div style="min-width:110px">${r.paused ? "Paused" : r.is_up == null ? "Pending first check" : (r.is_up ? "Up" : "Down") + " &middot; " + timeAgo(r.checked_at)}</div>
+            <div style="min-width:110px">${statusHtml(r.paused, r.is_up, r.checked_at)}</div>
             <div style="min-width:70px">${pct(r.uptime_24h)} <span class="mono">24h</span></div>
             <div style="min-width:70px">${pct(r.uptime_7d)} <span class="mono">7d</span></div>
             <div style="min-width:90px" class="mono">down ${timeAgo(r.last_down)}</div>
@@ -255,13 +272,13 @@ export function renderStatusPage(rows) {
         ${navRow("status")}
         <h1 class="page-title">Status</h1>
         <div class="search-box"><input id="search" placeholder="Search by name, host, or tag..." oninput="filterRows()"></div>
-        <div class="Box" id="rows-box">${items}</div>
+        <div class="Box" id="rows-box">${headerRow}${items}</div>
         <p id="no-results" class="mono" style="display:none">No monitors match your search.</p>
         <footer>Checked every minute via Cloudflare Workers Cron Triggers + D1</footer>
         <script>
         function filterRows() {
             const q = document.getElementById("search").value.trim().toLowerCase();
-            const rows = document.querySelectorAll("#rows-box .Box-row");
+            const rows = document.querySelectorAll("#rows-box .Box-row:not(.header-row)");
             let visible = 0;
             rows.forEach((row) => {
                 const match = !q || row.dataset.search.includes(q);
@@ -534,7 +551,8 @@ export function renderAdminPage() {
         }
         function viewRow(t) {
             const dotClass = t.paused ? "paused" : (t.is_up == null ? "pending" : (t.is_up ? "up" : "down"));
-            const stateText = t.paused ? "Paused" : (t.is_up == null ? "Pending first check" : (t.is_up ? "Up" : "Down") + " \\u00b7 " + timeAgo(t.checked_at));
+            const stateText = t.paused ? "Paused" : (t.is_up == null ? "Pending first check" :
+                '<span class="status-badge ' + (t.is_up ? "up" : "down") + '">' + (t.is_up ? "Up" : "Down") + "</span> \\u00b7 " + timeAgo(t.checked_at));
             const notesPreview = (t.notes || "").replace(/\\s+/g, " ").slice(0, 100);
             return \`<div class="Box-row" data-id="\${t.id}">
                 <span class="dot \${dotClass}"></span>
@@ -632,14 +650,21 @@ export function renderAdminPage() {
             return haystack.includes(q);
         }
 
+        const targetsHeaderRow = '<div class="Box-row header-row">' +
+            '<span style="width:8px"></span>' +
+            '<div class="grow">Monitor</div>' +
+            '<div style="min-width:130px">Status</div>' +
+            '<div class="actions" style="margin-left:0">Actions</div>' +
+            '</div>';
         function renderTargets() {
             const q = (document.getElementById("search")?.value || "").trim().toLowerCase();
             const visible = targets.filter((t) => matchesSearch(t, q));
-            document.getElementById("targets-box").innerHTML =
+            document.getElementById("targets-box").innerHTML = targetsHeaderRow + (
                 visible.map((t) => t.id === editingId ? editRow(t) : viewRow(t)).join("")
                 || (targets.length
                     ? '<div class="Box-row mono">No monitors match your search.</div>'
-                    : '<div class="Box-row mono">No monitors yet -- add one below.</div>');
+                    : '<div class="Box-row mono">No monitors yet -- add one below.</div>')
+            );
         }
         function filterByTag(tag) {
             document.getElementById("search").value = tag;
