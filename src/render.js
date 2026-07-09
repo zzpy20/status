@@ -336,6 +336,7 @@ export function renderDetailPage(m) {
             <div class="card"><div class="label">24h uptime</div><div class="value">${pct(m.uptime24h.pct)}</div><div class="mono">${m.incidents24h.count} incidents, ${duration(m.incidents24h.totalDownMs)} down</div></div>
             <div class="card"><div class="label">7d uptime</div><div class="value">${pct(m.uptime7d.pct)}</div><div class="mono">${m.incidents7d.count} incidents, ${duration(m.incidents7d.totalDownMs)} down</div></div>
             <div class="card"><div class="label">30d uptime</div><div class="value">${pct(m.uptime30d.pct)}</div><div class="mono">${m.incidents30d.count} incidents, ${duration(m.incidents30d.totalDownMs)} down</div></div>
+            <div class="card"><div class="label">365d uptime</div><div class="value">${pct(m.uptime365d.pct)}</div><div class="mono">${m.incidents365d.count} incidents, ${duration(m.incidents365d.totalDownMs)} down</div></div>
         </div>
 
         <h2 class="section-title">Response time (last 24h)</h2>
