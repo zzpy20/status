@@ -1,4 +1,5 @@
 import { targetIdentifier } from "./identifier.js";
+import { formatBrisbaneTime } from "./time.js";
 
 function timeAgo(ms) {
     if (ms == null) return "never";
@@ -272,8 +273,8 @@ function sparkline(series, width = 860, height = 120) {
 export function renderDetailPage(m) {
     const incidentRows = m.incidents24h.list.slice().reverse().map((i) => `
         <tr>
-            <td>${new Date(i.start).toLocaleString()}</td>
-            <td>${i.ongoing ? "ongoing" : new Date(i.end).toLocaleString()}</td>
+            <td>${formatBrisbaneTime(new Date(i.start))}</td>
+            <td>${i.ongoing ? "ongoing" : formatBrisbaneTime(new Date(i.end))}</td>
             <td>${duration(i.end - i.start)}</td>
         </tr>`).join("") || `<tr><td colspan="3" class="mono">No incidents in the last 24h.</td></tr>`;
 
@@ -318,8 +319,8 @@ export function renderIncidentsPage(incidents) {
             <td><span class="dot ${inc.ongoing ? "down" : "up"}"></span> ${inc.ongoing ? "Ongoing" : "Resolved"}</td>
             <td><a href="/monitor/${inc.targetId}">${inc.targetName}</a></td>
             <td>${inc.reason || "—"}</td>
-            <td>${new Date(inc.start).toLocaleString()}</td>
-            <td>${inc.ongoing ? "—" : new Date(inc.end).toLocaleString()}</td>
+            <td>${formatBrisbaneTime(new Date(inc.start))}</td>
+            <td>${inc.ongoing ? "—" : formatBrisbaneTime(new Date(inc.end))}</td>
             <td>${duration(inc.end - inc.start)}</td>
         </tr>`).join("") || `<tr><td colspan="6" class="mono">No incidents recorded yet.</td></tr>`;
 
