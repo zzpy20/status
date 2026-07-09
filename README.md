@@ -13,6 +13,12 @@ stored in D1 (a `targets` table), managed entirely through the admin UI/API
 -- no code changes or redeploys needed to add/edit/remove a monitor. Reuse
 this same Worker for a different project just by adding different targets.
 
+## Screenshots
+
+| Status page | Admin page | Incidents page |
+| --- | --- | --- |
+| [![Status page](docs/screenshots/status-page.png)](docs/screenshots/status-page.png) | [![Admin page](docs/screenshots/admin-page.png)](docs/screenshots/admin-page.png) | [![Incidents page](docs/screenshots/incidents-page.png)](docs/screenshots/incidents-page.png) |
+
 ## Why this exists
 
 Built as a self-hosted alternative to services like UptimeRobot, for a case

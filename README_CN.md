@@ -6,6 +6,12 @@
 
 设计上是一个通用工具，不绑定任何具体项目：监控什么完全存在 D1 里（一张 `targets` 表），全部通过管理界面/API 来管理——增加、编辑、删除监控项都不需要改代码或重新部署。以后要用在别的项目上，直接换一批监控目标就行，用的还是这同一个 Worker。
 
+## 截图
+
+| 状态页 | 管理页 | 故障页 |
+| --- | --- | --- |
+| [![状态页](docs/screenshots/status-page.png)](docs/screenshots/status-page.png) | [![管理页](docs/screenshots/admin-page.png)](docs/screenshots/admin-page.png) | [![故障页](docs/screenshots/incidents-page.png)](docs/screenshots/incidents-page.png) |
+
 ## 为什么会有这个项目
 
 最初是想做一个自建版的 UptimeRobot 替代品，因为被监控的东西（IP 会偶尔漂移的代理服务器）需要的是 TCP 层面的检查（"这个端口是不是真的能连上"），而不是 HTTP 检查——而且从个人电脑上运行检查这件事本身并不可靠（本地的 VPN 客户端可能会干扰检查结果）。把检查这一步放到 Cloudflare 的边缘节点上运行，而不是依赖某一台具体的机器，就完全绕开了这个问题。
