@@ -416,6 +416,15 @@ export function renderAdminPage() {
             <div class="search-box"><input id="search" placeholder="Search by name, host, tag, or notes..." oninput="renderTargets()"></div>
             <button class="primary" onclick="openAddModal()">+ Add monitor</button>
         </div>
+        <div id="bulk-toolbar" class="Box" style="display:none; padding:10px 16px; margin-bottom:12px; align-items:center; gap:8px; flex-wrap:wrap;">
+            <strong id="bulk-count" class="mono"></strong>
+            <button onclick="bulkAddTags()">Add tags</button>
+            <button onclick="bulkRemoveTags()">Remove tags</button>
+            <button onclick="bulkPause()">Pause</button>
+            <button class="danger" onclick="bulkReset()">Reset</button>
+            <button class="danger" onclick="bulkDelete()">Delete</button>
+            <button class="link" onclick="clearSelection()">Clear selection</button>
+        </div>
         <div class="Box" id="targets-box"></div>
 
         <div class="modal-backdrop" id="monitor-modal-backdrop" onclick="if (event.target === this) closeModal()">
@@ -556,6 +565,7 @@ export function renderAdminPage() {
                 '<span class="status-badge ' + (t.is_up ? "up" : "down") + '">' + (t.is_up ? "Up" : "Down") + "</span> \\u00b7 " + timeAgo(t.checked_at));
             const notesPreview = (t.notes || "").replace(/\\s+/g, " ").slice(0, 100);
             return \`<div class="Box-row" data-id="\${t.id}">
+                <input type="checkbox" class="row-checkbox" data-id="\${t.id}" onchange="updateBulkToolbar()" />
                 <span class="dot \${dotClass}"></span>
                 <div class="grow">
                     <strong>\${t.name}</strong>
@@ -589,7 +599,7 @@ export function renderAdminPage() {
         }
 
         const targetsHeaderRow = '<div class="Box-row header-row">' +
-            '<span style="width:8px"></span>' +
+            '<input type="checkbox" id="select-all" onchange="toggleSelectAll(this.checked)" />' +
             '<div class="grow">Monitor</div>' +
             '<div style="min-width:130px">Status</div>' +
             '<div class="actions" style="margin-left:0">Actions</div>' +
@@ -660,6 +670,90 @@ export function renderAdminPage() {
             await api(\`/admin/api/targets/\${id}\`, { method: "DELETE" });
             loadTargets();
         }
+
+        function getSelectedIds() {
+            return Array.from(document.querySelectorAll(".row-checkbox:checked")).map((el) => Number(el.dataset.id));
+        }
+        function updateBulkToolbar() {
+            const count = getSelectedIds().length;
+            const toolbar = document.getElementById("bulk-toolbar");
+            toolbar.style.display = count > 0 ? "flex" : "none";
+            document.getElementById("bulk-count").textContent = count + " selected";
+        }
+        function toggleSelectAll(checked) {
+            document.querySelectorAll(".row-checkbox").forEach((el) => { el.checked = checked; });
+            updateBulkToolbar();
+        }
+        function clearSelection() {
+            document.querySelectorAll(".row-checkbox").forEach((el) => { el.checked = false; });
+            const selectAll = document.getElementById("select-all");
+            if (selectAll) selectAll.checked = false;
+            updateBulkToolbar();
+        }
+        // Full replace-payload for a target, since PUT replaces every field --
+        // spread the target's current values and override just what changed.
+        function targetToPayload(t, overrides) {
+            return { name: t.name, type: t.type, host: t.host, port: t.port, config: t.config, tags: t.tags, notes: t.notes, ...overrides };
+        }
+        async function bulkPause() {
+            const ids = getSelectedIds();
+            if (!ids.length) return;
+            if (!confirm(\`Pause \${ids.length} monitor(s)?\`)) return;
+            for (const id of ids) await api(\`/admin/api/targets/\${id}/pause\`, { method: "POST" });
+            clearSelection();
+            loadTargets();
+        }
+        async function bulkReset() {
+            const ids = getSelectedIds();
+            if (!ids.length) return;
+            if (!confirm(\`Reset \${ids.length} monitor(s)? This permanently deletes their check history -- uptime %, incidents, and response times all start fresh for each one.\`)) return;
+            for (const id of ids) await api(\`/admin/api/targets/\${id}/reset\`, { method: "POST" });
+            clearSelection();
+            loadTargets();
+        }
+        async function bulkDelete() {
+            const ids = getSelectedIds();
+            if (!ids.length) return;
+            if (!confirm(\`Delete \${ids.length} monitor(s) and all their history? This cannot be undone.\`)) return;
+            for (const id of ids) await api(\`/admin/api/targets/\${id}\`, { method: "DELETE" });
+            clearSelection();
+            loadTargets();
+        }
+        async function bulkAddTags() {
+            const ids = getSelectedIds();
+            if (!ids.length) return;
+            const input = prompt(\`Add tags to \${ids.length} monitor(s), comma-separated:\`);
+            if (!input) return;
+            const toAdd = input.split(",").map((s) => s.trim()).filter(Boolean);
+            if (!toAdd.length) return;
+            for (const id of ids) {
+                const t = targets.find((x) => x.id === id);
+                if (!t) continue;
+                const existing = (t.tags || "").split(",").map((s) => s.trim()).filter(Boolean);
+                const merged = Array.from(new Set([...existing, ...toAdd]));
+                await api(\`/admin/api/targets/\${id}\`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(targetToPayload(t, { tags: merged.join(", ") })) });
+            }
+            clearSelection();
+            loadTargets();
+        }
+        async function bulkRemoveTags() {
+            const ids = getSelectedIds();
+            if (!ids.length) return;
+            const input = prompt(\`Remove tags from \${ids.length} monitor(s), comma-separated:\`);
+            if (!input) return;
+            const toRemove = input.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+            if (!toRemove.length) return;
+            for (const id of ids) {
+                const t = targets.find((x) => x.id === id);
+                if (!t) continue;
+                const existing = (t.tags || "").split(",").map((s) => s.trim()).filter(Boolean);
+                const remaining = existing.filter((tag) => !toRemove.includes(tag.toLowerCase()));
+                await api(\`/admin/api/targets/\${id}\`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(targetToPayload(t, { tags: remaining.join(", ") })) });
+            }
+            clearSelection();
+            loadTargets();
+        }
+
         function clearModalFields() {
             ["name", "port-host", "port-num", "http-url", "expectedStatus", "keyword", "dns-hostname", "expectedValue", "tags", "notes"].forEach((field) => {
                 const el = document.getElementById("new-" + field);
