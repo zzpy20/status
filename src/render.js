@@ -87,7 +87,7 @@ const BASE_STYLE = `
     }
     a { color: var(--accent-fg); text-decoration: none; }
     a:hover { text-decoration: underline; }
-    .wrap { max-width: 920px; margin: 0 auto; }
+    .wrap { max-width: 1200px; margin: 0 auto; }
 
     h1.page-title { font-size: 20px; font-weight: 600; margin: 0 0 16px; }
     h2.section-title { font-size: 14px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.03em; margin: 32px 0 8px; }
@@ -99,10 +99,13 @@ const BASE_STYLE = `
     .Box-header { padding: 12px 16px; border-bottom: 1px solid var(--border-muted); font-weight: 600; font-size: 14px; }
 
     table { border-collapse: collapse; width: 100%; }
-    th, td { text-align: left; padding: 8px 16px; font-size: 14px; }
-    thead th { color: var(--fg-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.02em; border-bottom: 1px solid var(--border-default); }
+    th, td { text-align: left; padding: 14px 16px; font-size: 14px; }
+    thead th { color: var(--fg-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.02em; border-bottom: 1px solid var(--border-default); padding: 10px 16px; }
     tbody tr { border-bottom: 1px solid var(--border-muted); }
     tbody tr:last-child { border-bottom: none; }
+    .status-badge { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+    .status-badge.up { color: var(--success-fg); }
+    .status-badge.down { color: var(--danger-fg); }
 
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
     .dot.up { background: var(--success-emphasis); }
@@ -279,7 +282,7 @@ export function renderDetailPage(m) {
         </tr>`).join("") || `<tr><td colspan="3" class="mono">No incidents in the last 24h.</td></tr>`;
 
     return pageShell(m.name, `
-        ${navRow("status")}
+        ${navRow()}
         <h1 class="page-title"><span class="dot ${m.is_up == null ? "pending" : m.is_up ? "up" : "down"}"></span> ${m.name}</h1>
         <p class="mono">${targetIdentifier(m)}</p>
         ${tagPillsHtml(m.tags, "goToTag")}
@@ -316,7 +319,7 @@ export function renderDetailPage(m) {
 export function renderIncidentsPage(incidents) {
     const rows = incidents.map((inc) => `
         <tr data-search="${inc.targetName.toLowerCase()}">
-            <td><span class="dot ${inc.ongoing ? "down" : "up"}"></span> ${inc.ongoing ? "Ongoing" : "Resolved"}</td>
+            <td><span class="status-badge ${inc.ongoing ? "down" : "up"}"><span class="dot ${inc.ongoing ? "down" : "up"}"></span>${inc.ongoing ? "Ongoing" : "Resolved"}</span></td>
             <td><a href="/monitor/${inc.targetId}">${inc.targetName}</a></td>
             <td>${inc.reason || "—"}</td>
             <td>${formatBrisbaneTime(new Date(inc.start))}</td>
