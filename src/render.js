@@ -417,11 +417,11 @@ export function renderAdminPage() {
         </div>
         <div class="Box" id="targets-box"></div>
 
-        <div class="modal-backdrop" id="add-modal-backdrop" onclick="if (event.target === this) closeAddModal()">
+        <div class="modal-backdrop" id="monitor-modal-backdrop" onclick="if (event.target === this) closeModal()">
         <div class="modal">
             <div class="modal-header">
-                <h2>Add monitor</h2>
-                <button class="link" onclick="closeAddModal()">Close</button>
+                <h2 id="modal-title">Add monitor</h2>
+                <button class="link" onclick="closeModal()">Close</button>
             </div>
             <div class="form-row">
                 <div class="field grow"><label>Name</label><input id="new-name" placeholder="e.g. Shenzhen - forward (443)" /></div>
@@ -464,7 +464,7 @@ export function renderAdminPage() {
                 </div>
                 <textarea id="new-notes" rows="4" placeholder="what this is for -- bold/italic/underline/strikethrough via the buttons above"></textarea>
             </div>
-            <div style="margin-top:16px"><button class="primary" onclick="addTarget()">Add monitor</button></div>
+            <div style="margin-top:16px"><button class="primary" id="modal-submit-btn" onclick="saveModal()">Add monitor</button></div>
         </div>
         </div>
 
@@ -565,74 +565,11 @@ export function renderAdminPage() {
                 </div>
                 <div class="mono" style="min-width:130px">\${stateText}</div>
                 <div class="actions">
-                    <button class="link" onclick="startEdit(\${t.id})">Edit</button>
+                    <button class="link" onclick="openEditModal(\${t.id})">Edit</button>
                     <button onclick="togglePause(\${t.id}, \${t.paused})">\${t.paused ? 'Resume' : 'Pause'}</button>
                     <button onclick="testNotify(\${t.id})">Test notify</button>
                     <button class="danger" onclick="resetTarget(\${t.id})">Reset</button>
                     <button class="danger" onclick="removeTarget(\${t.id})">Delete</button>
-                </div>
-            </div>\`;
-        }
-
-        function editRow(t) {
-            const notesId = "edit-notes-" + t.id;
-            const prefix = "edit-" + t.id;
-            const type = t.type || "port";
-            const cfg = t.config || {};
-            const dispPort = type === "port" ? (t.host || "") : "";
-            const dispHttp = type === "http" ? (t.host || "") : "";
-            const dispDns = type === "dns" ? (t.host || "") : "";
-            return \`<div class="Box-row" data-id="\${t.id}">
-                <div class="grow">
-                    <div class="form-row">
-                        <div class="field grow"><label>Name</label><input value="\${t.name}" data-field="name" /></div>
-                        <div class="field" style="flex:0 0 140px">
-                            <label>Type</label>
-                            <select data-field="type" onchange="onTypeChange('\${prefix}', this.value)">
-                                <option value="port" \${type === "port" ? "selected" : ""}>Port (TCP)</option>
-                                <option value="http" \${type === "http" ? "selected" : ""}>HTTP</option>
-                                <option value="dns" \${type === "dns" ? "selected" : ""}>DNS</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div id="\${prefix}-fields-port" class="form-row" style="margin-top:8px; display:\${type === "port" ? "" : "none"}">
-                        <div class="field grow"><label>Host</label><input value="\${dispPort}" data-field="port-host" /></div>
-                        <div class="field port"><label>Port</label><input value="\${type === "port" ? t.port : ""}" data-field="port-num" type="number" /></div>
-                    </div>
-                    <div id="\${prefix}-fields-http" class="form-row" style="margin-top:8px; display:\${type === "http" ? "" : "none"}">
-                        <div class="field grow"><label>URL</label><input value="\${dispHttp}" data-field="http-url" /></div>
-                        <div class="field grow"><label>Expected status</label><input value="\${cfg.expectedStatus || ""}" data-field="expectedStatus" placeholder="optional" /></div>
-                        <div class="field grow"><label>Keyword</label><input value="\${cfg.keyword || ""}" data-field="keyword" placeholder="optional" /></div>
-                    </div>
-                    <div id="\${prefix}-fields-dns" class="form-row" style="margin-top:8px; display:\${type === "dns" ? "" : "none"}">
-                        <div class="field grow"><label>Hostname</label><input value="\${dispDns}" data-field="dns-hostname" /></div>
-                        <div class="field" style="flex:0 0 110px">
-                            <label>Record type</label>
-                            <select data-field="recordType">
-                                <option \${(cfg.recordType || "A") === "A" ? "selected" : ""}>A</option>
-                                <option \${cfg.recordType === "AAAA" ? "selected" : ""}>AAAA</option>
-                                <option \${cfg.recordType === "CNAME" ? "selected" : ""}>CNAME</option>
-                            </select>
-                        </div>
-                        <div class="field grow"><label>Expected value</label><input value="\${cfg.expectedValue || ""}" data-field="expectedValue" placeholder="optional" /></div>
-                    </div>
-                    <div class="form-row" style="margin-top:8px">
-                        <div class="field grow"><label>Tags</label><input value="\${t.tags || ""}" data-field="tags" placeholder="comma-separated" /></div>
-                    </div>
-                    <div class="field" style="margin-top:8px">
-                        <label>Notes</label>
-                        <div class="fmt-toolbar">
-                            <button type="button" style="font-weight:700" onclick="wrapSelection('\${notesId}','**')">B</button>
-                            <button type="button" style="font-style:italic" onclick="wrapSelection('\${notesId}','*')">I</button>
-                            <button type="button" style="text-decoration:underline" onclick="wrapSelection('\${notesId}','__')">U</button>
-                            <button type="button" style="text-decoration:line-through" onclick="wrapSelection('\${notesId}','~~')">S</button>
-                        </div>
-                        <textarea id="\${notesId}" data-field="notes" rows="4">\${escapeHtml(t.notes || "")}</textarea>
-                    </div>
-                </div>
-                <div class="actions">
-                    <button class="primary" onclick="saveEdit(\${t.id})">Save</button>
-                    <button onclick="cancelEdit()">Cancel</button>
                 </div>
             </div>\`;
         }
@@ -660,7 +597,7 @@ export function renderAdminPage() {
             const q = (document.getElementById("search")?.value || "").trim().toLowerCase();
             const visible = targets.filter((t) => matchesSearch(t, q));
             document.getElementById("targets-box").innerHTML = targetsHeaderRow + (
-                visible.map((t) => t.id === editingId ? editRow(t) : viewRow(t)).join("")
+                visible.map((t) => viewRow(t)).join("")
                 || (targets.length
                     ? '<div class="Box-row mono">No monitors match your search.</div>'
                     : '<div class="Box-row mono">No monitors yet -- add one below.</div>')
@@ -677,8 +614,6 @@ export function renderAdminPage() {
                 renderTargets();
             } catch (e) {}
         }
-        function startEdit(id) { editingId = id; renderTargets(); }
-        function cancelEdit() { editingId = null; renderTargets(); }
         // Builds the {name, type, host, port, tags, notes, config} payload
         // from whichever fields are relevant to the selected type. get(field)
         // abstracts over "look up by id" (add form) vs "look up by data-field
@@ -705,18 +640,6 @@ export function renderAdminPage() {
             return { name, type, host, port, tags, notes, config };
         }
 
-        async function saveEdit(id) {
-            const row = document.querySelector(\`[data-id="\${id}"]\`);
-            const get = (field) => {
-                const el = row.querySelector(\`[data-field="\${field}"]\`);
-                return el ? el.value : "";
-            };
-            const body = buildPayload(get);
-            if (!body.name || !body.host) return alert("name and host/URL/hostname are required");
-            await api(\`/admin/api/targets/\${id}\`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-            editingId = null;
-            loadTargets();
-        }
         async function togglePause(id, paused) {
             await api(\`/admin/api/targets/\${id}/\${paused ? "resume" : "pause"}\`, { method: "POST" });
             loadTargets();
@@ -736,25 +659,67 @@ export function renderAdminPage() {
             await api(\`/admin/api/targets/\${id}\`, { method: "DELETE" });
             loadTargets();
         }
-        function openAddModal() { document.getElementById("add-modal-backdrop").classList.add("open"); }
-        function closeAddModal() { document.getElementById("add-modal-backdrop").classList.remove("open"); }
-        document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeAddModal(); });
+        function clearModalFields() {
+            ["name", "port-host", "port-num", "http-url", "expectedStatus", "keyword", "dns-hostname", "expectedValue", "tags", "notes"].forEach((field) => {
+                const el = document.getElementById("new-" + field);
+                if (el) el.value = "";
+            });
+            document.getElementById("new-type").value = "port";
+            document.getElementById("new-recordType").value = "A";
+            onTypeChange("new", "port");
+        }
+        function fillModalFields(t) {
+            const type = t.type || "port";
+            const cfg = t.config || {};
+            document.getElementById("new-name").value = t.name || "";
+            document.getElementById("new-type").value = type;
+            onTypeChange("new", type);
+            document.getElementById("new-port-host").value = type === "port" ? (t.host || "") : "";
+            document.getElementById("new-port-num").value = type === "port" ? (t.port || "") : "";
+            document.getElementById("new-http-url").value = type === "http" ? (t.host || "") : "";
+            document.getElementById("new-expectedStatus").value = cfg.expectedStatus || "";
+            document.getElementById("new-keyword").value = cfg.keyword || "";
+            document.getElementById("new-dns-hostname").value = type === "dns" ? (t.host || "") : "";
+            document.getElementById("new-recordType").value = cfg.recordType || "A";
+            document.getElementById("new-expectedValue").value = cfg.expectedValue || "";
+            document.getElementById("new-tags").value = t.tags || "";
+            document.getElementById("new-notes").value = t.notes || "";
+        }
+        function openAddModal() {
+            editingId = null;
+            clearModalFields();
+            document.getElementById("modal-title").textContent = "Add monitor";
+            document.getElementById("modal-submit-btn").textContent = "Add monitor";
+            document.getElementById("monitor-modal-backdrop").classList.add("open");
+        }
+        function openEditModal(id) {
+            const t = targets.find((x) => x.id === id);
+            if (!t) return;
+            editingId = id;
+            fillModalFields(t);
+            document.getElementById("modal-title").textContent = "Edit monitor";
+            document.getElementById("modal-submit-btn").textContent = "Save changes";
+            document.getElementById("monitor-modal-backdrop").classList.add("open");
+        }
+        function closeModal() {
+            document.getElementById("monitor-modal-backdrop").classList.remove("open");
+            editingId = null;
+        }
+        document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
 
-        async function addTarget() {
+        async function saveModal() {
             const get = (field) => {
                 const el = document.getElementById("new-" + field);
                 return el ? el.value : "";
             };
             const body = buildPayload(get);
             if (!body.name || !body.host) return alert("name and host/URL/hostname are required");
-            await api("/admin/api/targets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-            ["name", "type", "port-host", "port-num", "http-url", "expectedStatus", "keyword", "dns-hostname", "expectedValue", "tags", "notes"].forEach((field) => {
-                const el = document.getElementById("new-" + field);
-                if (el) el.value = "";
-            });
-            document.getElementById("new-type").value = "port";
-            onTypeChange("new", "port");
-            closeAddModal();
+            if (editingId) {
+                await api(\`/admin/api/targets/\${editingId}\`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+            } else {
+                await api("/admin/api/targets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+            }
+            closeModal();
             loadTargets();
         }
         if (!getToken()) document.getElementById("auth-box").style.display = "block";
