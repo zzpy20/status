@@ -5,6 +5,7 @@ import { handleAdminApi } from "./admin.js";
 import { notifyAll } from "./notify.js";
 import { formatBrisbaneTime } from "./time.js";
 import { targetIdentifier } from "./identifier.js";
+import { syncDnsAll } from "./dns-drift-sync.js";
 
 // no-store on every HTML response -- this bit us twice already (Reset,
 // then the detail-page nav fix) where a browser/mobile-Safari cached page
@@ -101,6 +102,9 @@ function stripNotes(rows) {
 export default {
     async scheduled(event, env, ctx) {
         ctx.waitUntil(runChecks(env));
+        ctx.waitUntil(syncDnsAll(env).then((results) => {
+            for (const r of results) console.log(JSON.stringify(r));
+        }));
     },
 
     async fetch(request, env, ctx) {
