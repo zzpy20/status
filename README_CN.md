@@ -39,6 +39,7 @@
 - 响应式布局一直适配到手机宽度的屏幕——640px 以下时，列表式的行会改成纵向堆叠，表格会在容器内横向滚动，而不是把所有内容硬挤在一行里。
 - **管理 API**（`/admin/api/*`）——跟界面上一样的操作，走普通 JSON 接口，方便写脚本调用。
 - **Telegram + 邮件推送通知**——状态变化时（从正常变异常，或从异常恢复正常）Worker 会同时发一条 Telegram 消息和一封排版好的 HTML 邮件；两个通道各自独立（一个失败不会影响另一个），任意一个不配置就相当于禁用那一个。
+- **Shenzhen-Reality DNS 漂移自动修复**（`src/dns-drift-sync.js`，2026-07-11 加入）——这是这个工具原本"通用设计"里唯一的一个例外，专门为某一个项目服务。Shenzhen-Reality 的两台阿里云 ECS 都是抢占式实例，重启后会随机换一个公网 IP；这个功能在每次 cron 触发时都会跑一遍，通过一次从零实现的阿里云 RPC 签名请求（`src/aliyun.js`）查出每台实例真实的 IP，跟 Cloudflare 上的 DNS 记录（`src/cloudflare-dns.js`）做对比，漂移了就 PATCH 过去，并发一条 Telegram 提醒。之所以放在这里而不是单独建一个 Worker，纯粹是因为这个 Cloudflare 账号的 cron 触发器数量已经用满了免费版的 5 个上限——完整的来龙去脉见 `Shenzhen-Reality/README.md` 的"自动修复 DNS 漂移"一节，里面还记录了配置所需的几个密钥（`ALIYUN_ACCESS_KEY_ID`/`SECRET`、`CF_API_TOKEN`）过程中踩到的一个真实的 `wrangler secret put` 交互式输入 bug。如果以后把这个 Worker 挪去用在别的项目上（这本来就是它的设计初衷），这个模块以及它额外用到的 4 个密钥/变量是唯一不通用的部分——连同 `index.js` 里调用它的那一行 `scheduled()` 代码一起删掉就行。
 
 ## 搭建步骤
 
