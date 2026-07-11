@@ -2,6 +2,8 @@
 
 [English](README.md) | [中文](README_CN.md)
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for a diagram of this repo's internal module structure and how it relates to `Shenzhen-Reality`.
+
 A minimal, self-hosted uptime monitor: a Cloudflare Worker checks a list of
 TCP ports on a schedule, logs every result to D1, and serves a status page,
 per-monitor detail pages, an admin UI/API for managing what's monitored, and
