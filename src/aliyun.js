@@ -69,8 +69,11 @@ export async function describeInstancePublicIp(env, region, instanceId) {
         throw new Error(`Aliyun API error: ${res.status} ${body.Code || ""} ${body.Message || JSON.stringify(body)}`);
     }
     const instance = body.Instances?.Instance?.[0];
+    // Auto-allocated (NAT) public IPs report under PublicIpAddress; EIP-bound
+    // instances report under EipAddress instead -- same fallback sync-dns.sh
+    // already uses (`.PublicIpAddress.IpAddress[0] // .EipAddress.IpAddress`).
     return {
-        publicIp: instance?.PublicIpAddress?.IpAddress?.[0] || null,
+        publicIp: instance?.PublicIpAddress?.IpAddress?.[0] || instance?.EipAddress?.IpAddress || null,
         status: instance?.Status,
     };
 }
