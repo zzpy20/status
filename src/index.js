@@ -70,7 +70,7 @@ async function buildDetailData(env, id) {
     const last = await db.lastCheck(env.DB, id);
     const isUp = last ? last.is_up === 1 : null;
 
-    const [uptime24h, uptime7d, uptime30d, uptime365d, incidents24h, incidents7d, incidents30d, incidents365d, latency24h, latencySeries, stateSince] = await Promise.all([
+    const [uptime24h, uptime7d, uptime30d, uptime365d, incidents24h, incidents7d, incidents30d, incidents365d, latency24h, latency30d, latencySeries, stateSince] = await Promise.all([
         db.uptimeStats(env.DB, id, now - DAY),
         db.uptimeStats(env.DB, id, now - WEEK),
         db.uptimeStats(env.DB, id, now - MONTH),
@@ -80,6 +80,7 @@ async function buildDetailData(env, id) {
         db.incidents(env.DB, id, now - MONTH),
         db.incidents(env.DB, id, now - YEAR),
         db.latencyStats(env.DB, id, now - DAY),
+        db.latencyStats(env.DB, id, now - MONTH),
         db.latencySeries(env.DB, id, now - DAY),
         findStateSince(env, id, isUp),
     ]);
@@ -89,7 +90,7 @@ async function buildDetailData(env, id) {
         is_up: isUp, checked_at: last ? last.checked_at : null, stateSince,
         uptime24h, uptime7d, uptime30d, uptime365d,
         incidents24h, incidents7d, incidents30d, incidents365d,
-        latency24h, latencySeries,
+        latency24h, latency30d, latencySeries,
     };
 }
 

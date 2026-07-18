@@ -40,6 +40,7 @@ const BASE_STYLE = `
         --accent-fg: #0969da;
         --success-fg: #1a7f37; --success-emphasis: #1f883d; --success-hover: #1a7f37;
         --danger-fg: #cf222e; --danger-emphasis: #da3633;
+        --danger-subtle: #fff1f0; --success-subtle: #ddf4e4;
         --neutral-emphasis: #6e7781;
         --btn-bg: #f6f8fa; --btn-border: rgba(31,35,40,0.15); --btn-hover-bg: #f3f4f6;
         --shadow: 0 1px 0 rgba(31,35,40,0.04);
@@ -51,6 +52,7 @@ const BASE_STYLE = `
         --accent-fg: #2f81f7;
         --success-fg: #3fb950; --success-emphasis: #238636; --success-hover: #2ea043;
         --danger-fg: #f85149; --danger-emphasis: #da3633;
+        --danger-subtle: #2d1214; --success-subtle: #122117;
         --neutral-emphasis: #6e7781;
         --btn-bg: #21262d; --btn-border: rgba(240,246,252,0.1); --btn-hover-bg: #30363d;
         --shadow: none;
@@ -63,6 +65,7 @@ const BASE_STYLE = `
             --accent-fg: #2f81f7;
             --success-fg: #3fb950; --success-emphasis: #238636; --success-hover: #2ea043;
             --danger-fg: #f85149; --danger-emphasis: #da3633;
+            --danger-subtle: #2d1214; --success-subtle: #122117;
             --btn-bg: #21262d; --btn-border: rgba(240,246,252,0.1); --btn-hover-bg: #30363d;
             --shadow: none;
         }
@@ -74,6 +77,7 @@ const BASE_STYLE = `
         --accent-fg: #0969da;
         --success-fg: #1a7f37; --success-emphasis: #1f883d; --success-hover: #1a7f37;
         --danger-fg: #cf222e; --danger-emphasis: #da3633;
+        --danger-subtle: #fff1f0; --success-subtle: #ddf4e4;
         --btn-bg: #f6f8fa; --btn-border: rgba(31,35,40,0.15); --btn-hover-bg: #f3f4f6;
         --shadow: 0 1px 0 rgba(31,35,40,0.04);
     }
@@ -121,6 +125,10 @@ const BASE_STYLE = `
     .card { background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 6px; padding: 16px; }
     .card .label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.02em; color: var(--fg-muted); margin-bottom: 4px; }
     .card .value { font-size: 24px; font-weight: 600; line-height: 1.2; }
+    .card.accent-danger { background: var(--danger-subtle); border-color: var(--danger-emphasis); }
+    .card.accent-danger .value { color: var(--danger-fg); }
+    .card.accent-success { background: var(--success-subtle); border-color: var(--success-emphasis); }
+    .card.accent-success .value { color: var(--success-fg); }
 
     button, input, select { font: inherit; font-size: 14px; }
     button {
@@ -331,12 +339,12 @@ function sparkline(series, width = 860, height = 120) {
 }
 
 export function renderDetailPage(m) {
-    const incidentRows = m.incidents24h.list.slice().reverse().map((i) => `
+    const incidentRows = m.incidents365d.list.slice().reverse().map((i) => `
         <tr>
             <td>${formatBrisbaneTime(new Date(i.start))}</td>
             <td>${i.ongoing ? "ongoing" : formatBrisbaneTime(new Date(i.end))}</td>
             <td>${duration(i.end - i.start)}</td>
-        </tr>`).join("") || `<tr><td colspan="3" class="mono">No incidents in the last 24h.</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="3" class="mono">No incidents in the last 365 days.</td></tr>`;
 
     return pageShell(m.name, `
         ${navRow()}
@@ -352,19 +360,20 @@ export function renderDetailPage(m) {
             <div class="card"><div class="label">7d uptime</div><div class="value">${pct(m.uptime7d.pct)}</div><div class="mono">${m.incidents7d.count} incidents, ${duration(m.incidents7d.totalDownMs)} down</div></div>
             <div class="card"><div class="label">30d uptime</div><div class="value">${pct(m.uptime30d.pct)}</div><div class="mono">${m.incidents30d.count} incidents, ${duration(m.incidents30d.totalDownMs)} down</div></div>
             <div class="card"><div class="label">365d uptime</div><div class="value">${pct(m.uptime365d.pct)}</div><div class="mono">${m.incidents365d.count} incidents, ${duration(m.incidents365d.totalDownMs)} down</div></div>
+            <div class="card ${m.incidents365d.totalDownMs > 0 ? "accent-danger" : "accent-success"}"><div class="label">Total downtime (365d)</div><div class="value">${duration(m.incidents365d.totalDownMs)}</div><div class="mono">${m.incidents365d.count} incidents</div></div>
         </div>
 
-        <h2 class="section-title">Response time (last 24h)</h2>
+        <h2 class="section-title">Response time (last 30 days)</h2>
         <div class="card">
             ${sparkline(m.latencySeries)}
             <div class="cards" style="margin-top:8px; margin-bottom:0">
-                <div><div class="label">Average</div><div class="value">${ms(m.latency24h.avg)}</div></div>
-                <div><div class="label">Minimum</div><div class="value">${ms(m.latency24h.min)}</div></div>
-                <div><div class="label">Maximum</div><div class="value">${ms(m.latency24h.max)}</div></div>
+                <div><div class="label">Average</div><div class="value">${ms(m.latency30d.avg)}</div></div>
+                <div><div class="label">Minimum</div><div class="value">${ms(m.latency30d.min)}</div></div>
+                <div><div class="label">Maximum</div><div class="value">${ms(m.latency30d.max)}</div></div>
             </div>
         </div>
 
-        <h2 class="section-title">Incidents (last 24h)</h2>
+        <h2 class="section-title">Incidents (last 365 days)</h2>
         <div class="Box">
             <table>
                 <thead><tr><th>Started</th><th>Ended</th><th>Duration</th></tr></thead>
