@@ -1,5 +1,6 @@
 const DAY = 24 * 60 * 60 * 1000;
 const WEEK = 7 * DAY;
+const YEAR = 365 * DAY;
 
 function parseTarget(row) {
     if (!row) return row;
@@ -19,9 +20,11 @@ export async function statusRows(db) {
         const last = recent[0] ?? null;
         const uptime24h = await uptimeStats(db, t.id, now - DAY);
         const uptime7d = await uptimeStats(db, t.id, now - WEEK);
-        const lastDownRow = await db.prepare(
-            "SELECT MAX(checked_at) AS last_down FROM checks WHERE target_id = ? AND is_up = 0"
-        ).bind(t.id).first();
+        // Last *confirmed* incident, not just the last lone failed check --
+        // otherwise a single blip that never became a real incident still
+        // shows up here, contradicting the incidents list on the detail page.
+        const recentIncidents = await incidents(db, t.id, now - YEAR);
+        const lastIncident = recentIncidents.list[recentIncidents.list.length - 1];
         return {
             id: t.id,
             name: t.name,
@@ -36,7 +39,7 @@ export async function statusRows(db) {
             checked_at: last ? last.checked_at : null,
             uptime_24h: uptime24h.pct,
             uptime_7d: uptime7d.pct,
-            last_down: lastDownRow?.last_down ?? null,
+            last_down: lastIncident ? lastIncident.end : null,
         };
     }));
 }
