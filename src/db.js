@@ -33,6 +33,7 @@ export async function statusRows(db) {
             port: t.port,
             config: t.config,
             paused: t.paused,
+            pinned: t.pinned,
             tags: t.tags,
             notes: t.notes,
             is_up: confirmedIsUp(recent),
@@ -46,8 +47,8 @@ export async function statusRows(db) {
 
 export async function listTargets(db, { includePaused = true } = {}) {
     const sql = includePaused
-        ? "SELECT * FROM targets ORDER BY id"
-        : "SELECT * FROM targets WHERE paused = 0 ORDER BY id";
+        ? "SELECT * FROM targets ORDER BY pinned DESC, id"
+        : "SELECT * FROM targets WHERE paused = 0 ORDER BY pinned DESC, id";
     const { results } = await db.prepare(sql).all();
     return results.map(parseTarget);
 }
@@ -84,6 +85,11 @@ export async function resetTarget(db, id) {
 
 export async function setPaused(db, id, paused) {
     await db.prepare("UPDATE targets SET paused = ? WHERE id = ?").bind(paused ? 1 : 0, id).run();
+    return getTarget(db, id);
+}
+
+export async function setPinned(db, id, pinned) {
+    await db.prepare("UPDATE targets SET pinned = ? WHERE id = ?").bind(pinned ? 1 : 0, id).run();
     return getTarget(db, id);
 }
 

@@ -76,6 +76,8 @@ export async function handleAdminApi(request, env, url) {
 
             if (parts[2] === "pause") return Response.json(await db.setPaused(env.DB, id, true));
             if (parts[2] === "resume") return Response.json(await db.setPaused(env.DB, id, false));
+            if (parts[2] === "pin") return Response.json(await db.setPinned(env.DB, id, true));
+            if (parts[2] === "unpin") return Response.json(await db.setPinned(env.DB, id, false));
             if (parts[2] === "reset") { await db.resetTarget(env.DB, id); return Response.json({ reset: true }); }
             if (parts[2] === "test-notify") return Response.json(await sendTestNotify(env, target));
         }

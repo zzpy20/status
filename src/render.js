@@ -190,6 +190,11 @@ const BASE_STYLE = `
         margin: 3px 4px 0 0; cursor: pointer;
     }
     .tag-pill:hover { background: var(--btn-hover-bg); }
+    .pin-badge {
+        display: inline-block; background: var(--accent-fg); color: #fff;
+        border-radius: 12px; padding: 1px 8px; font-size: 11px; font-weight: 600;
+        margin: 3px 4px 0 0;
+    }
     .notes-snippet { font-size: 12px; color: var(--fg-muted); margin-top: 3px; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
     .notes-snippet:hover { color: var(--accent-fg); }
     .notes-full { font-size: 13px; line-height: 1.6; color: var(--fg-default); margin-top: 6px; padding: 10px 12px; background: var(--canvas-subtle); border: 1px solid var(--border-muted); border-radius: 6px; max-width: 600px; }
@@ -275,6 +280,7 @@ export function renderStatusPage(rows) {
         <div class="Box-row" data-search="${(r.name + " " + r.host + " " + (r.tags || "")).toLowerCase()}">
             <span class="dot ${r.paused ? "paused" : r.is_up == null ? "pending" : r.is_up ? "up" : "down"}"></span>
             <div class="grow">
+                ${r.pinned ? '<span class="pin-badge">Pinned</span>' : ""}
                 <a href="/monitor/${r.id}"><strong>${r.name}</strong></a>
                 <div class="mono">${targetIdentifier(r)}</div>
                 ${tagPillsHtml(r.tags, "filterByTag")}
@@ -598,6 +604,7 @@ export function renderAdminPage() {
                 <input type="checkbox" class="row-checkbox" data-id="\${t.id}" onchange="updateBulkToolbar()" />
                 <span class="dot \${dotClass}"></span>
                 <div class="grow">
+                    \${t.pinned ? '<span class="pin-badge">Pinned</span>' : ""}
                     <strong>\${t.name}</strong>
                     <div class="mono">\${targetIdentifier(t)}</div>
                     \${tagPills(t.tags)}
@@ -607,6 +614,7 @@ export function renderAdminPage() {
                 <div class="mono" style="min-width:130px">\${stateText}</div>
                 <div class="actions">
                     <button class="link" onclick="openEditModal(\${t.id})">Edit</button>
+                    <button onclick="togglePin(\${t.id}, \${t.pinned})">\${t.pinned ? 'Unpin' : 'Pin to top'}</button>
                     <button onclick="togglePause(\${t.id}, \${t.paused})">\${t.paused ? 'Resume' : 'Pause'}</button>
                     <button onclick="testNotify(\${t.id})">Test notify</button>
                     <button class="danger" onclick="resetTarget(\${t.id})">Reset</button>
@@ -690,6 +698,10 @@ export function renderAdminPage() {
 
         async function togglePause(id, paused) {
             await api(\`/admin/api/targets/\${id}/\${paused ? "resume" : "pause"}\`, { method: "POST" });
+            loadTargets();
+        }
+        async function togglePin(id, pinned) {
+            await api(\`/admin/api/targets/\${id}/\${pinned ? "unpin" : "pin"}\`, { method: "POST" });
             loadTargets();
         }
         async function testNotify(id) {
