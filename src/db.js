@@ -15,7 +15,8 @@ export async function statusRows(db) {
     const now = Date.now();
     const targets = await listTargets(db);
     return Promise.all(targets.map(async (t) => {
-        const last = await lastCheck(db, t.id);
+        const recent = await recentChecks(db, t.id);
+        const last = recent[0] ?? null;
         const uptime24h = await uptimeStats(db, t.id, now - DAY);
         const uptime7d = await uptimeStats(db, t.id, now - WEEK);
         const lastDownRow = await db.prepare(
@@ -31,7 +32,7 @@ export async function statusRows(db) {
             paused: t.paused,
             tags: t.tags,
             notes: t.notes,
-            is_up: last ? last.is_up === 1 : null,
+            is_up: confirmedIsUp(recent),
             checked_at: last ? last.checked_at : null,
             uptime_24h: uptime24h.pct,
             uptime_7d: uptime7d.pct,
@@ -89,10 +90,23 @@ export async function insertCheck(db, target, isUp, latencyMs, reason) {
     ).bind(target.name, target.id, target.host, target.port, isUp ? 1 : 0, latencyMs, isUp ? null : (reason || null), Date.now()).run();
 }
 
-export async function lastCheck(db, targetId) {
-    return db.prepare(
-        "SELECT * FROM checks WHERE target_id = ? ORDER BY checked_at DESC LIMIT 1"
-    ).bind(targetId).first();
+// Most recent checks first (limit 2 by default), for debounced state below.
+export async function recentChecks(db, targetId, limit = 2) {
+    const { results } = await db.prepare(
+        "SELECT * FROM checks WHERE target_id = ? ORDER BY checked_at DESC LIMIT ?"
+    ).bind(targetId, limit).all();
+    return results;
+}
+
+// A single failed check is common noise (a transient network blip) and
+// isn't treated as "down" -- two consecutive failures are required to
+// confirm it. Recovery is immediate: one successful check is enough,
+// since there's no ambiguity about whether the target is reachable again.
+// `rows` must be most-recent-first, e.g. from recentChecks().
+export function confirmedIsUp(rows) {
+    if (!rows.length) return null;
+    if (rows[0].is_up === 1) return true;
+    return !(rows[1] && rows[1].is_up === 0);
 }
 
 export async function uptimeStats(db, targetId, sinceMs) {
@@ -120,9 +134,13 @@ export async function latencySeries(db, targetId, sinceMs, limit = 100) {
 }
 
 // Groups consecutive is_up=0 rows (in chronological order) into incidents.
-// An incident's "end" is the timestamp it was next confirmed back up (or
-// "now" if still ongoing) -- using the last down check's own timestamp would
-// understate an incident's duration by up to one check interval. Each
+// A lone failed check is treated as noise, same as confirmedIsUp() above --
+// an incident is only confirmed once a second consecutive failure follows,
+// at which point its "start" is backdated to that first failed check (it
+// really was down from then, the second check just confirmed it wasn't a
+// blip). An incident's "end" is the timestamp it was next confirmed back up
+// (or "now" if still ongoing) -- using the last down check's own timestamp
+// would understate an incident's duration by up to one check interval. Each
 // incident's "reason" is the fail_reason of the check that started it --
 // what triggered the outage, not every reason seen during it if it changed.
 export async function incidents(db, targetId, sinceMs) {
@@ -133,13 +151,24 @@ export async function incidents(db, targetId, sinceMs) {
 
     const out = [];
     let current = null;
+    let pendingFail = null; // first failed check of a streak, not yet confirmed
     for (const row of results) {
         if (row.is_up === 0) {
-            if (!current) current = { start: row.checked_at, end: row.checked_at, reason: row.fail_reason };
-        } else if (current) {
-            current.end = row.checked_at;
-            out.push(current);
-            current = null;
+            if (current) {
+                current.end = row.checked_at;
+            } else if (pendingFail) {
+                current = { start: pendingFail.checked_at, end: row.checked_at, reason: pendingFail.reason };
+                pendingFail = null;
+            } else {
+                pendingFail = { checked_at: row.checked_at, reason: row.fail_reason };
+            }
+        } else {
+            if (current) {
+                current.end = row.checked_at;
+                out.push(current);
+                current = null;
+            }
+            pendingFail = null;
         }
     }
     if (current) {

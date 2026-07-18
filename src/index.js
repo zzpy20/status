@@ -30,12 +30,14 @@ async function runChecks(env) {
     const results = [];
     for (const target of targets) {
         try {
-            const previous = await db.lastCheck(env.DB, target.id);
+            const previousRows = await db.recentChecks(env.DB, target.id);
+            const previousConfirmed = db.confirmedIsUp(previousRows);
             const { isUp, latencyMs, reason } = await runCheck(target);
             await db.insertCheck(env.DB, target, isUp, latencyMs, reason);
 
-            if (previous && previous.is_up !== (isUp ? 1 : 0)) {
-                await notifyStateChange(env, target, isUp);
+            const newConfirmed = db.confirmedIsUp([{ is_up: isUp ? 1 : 0 }, ...previousRows]);
+            if (previousConfirmed !== null && previousConfirmed !== newConfirmed) {
+                await notifyStateChange(env, target, newConfirmed);
             }
             results.push({ target: target.name, isUp, error: null });
         } catch (err) {
@@ -67,8 +69,9 @@ async function buildDetailData(env, id) {
     const t = await db.getTarget(env.DB, id);
     if (!t) return null;
     const now = Date.now();
-    const last = await db.lastCheck(env.DB, id);
-    const isUp = last ? last.is_up === 1 : null;
+    const recent = await db.recentChecks(env.DB, id);
+    const last = recent[0] ?? null;
+    const isUp = db.confirmedIsUp(recent);
 
     const [uptime24h, uptime7d, uptime30d, uptime365d, incidents24h, incidents7d, incidents30d, incidents365d, latency24h, latency30d, latencySeries, stateSince] = await Promise.all([
         db.uptimeStats(env.DB, id, now - DAY),
