@@ -73,20 +73,26 @@ async function buildDetailData(env, id) {
     const last = recent[0] ?? null;
     const isUp = db.confirmedIsUp(recent);
 
-    const [uptime24h, uptime7d, uptime30d, uptime365d, incidents24h, incidents7d, incidents30d, incidents365d, latency24h, latency30d, latencySeries, stateSince] = await Promise.all([
+    // Incidents for DAY/WEEK/MONTH/YEAR all overlap (each is a subset of
+    // YEAR), so fetch the raw checks once for the widest window and group
+    // each narrower window in memory instead of re-querying the DB 4x per
+    // page view -- that repeated full-year rescan was a major contributor
+    // to D1's account-wide daily row-read quota getting exhausted.
+    const [uptime24h, uptime7d, uptime30d, uptime365d, yearRows, latency24h, latency30d, latencySeries, stateSince] = await Promise.all([
         db.uptimeStats(env.DB, id, now - DAY),
         db.uptimeStats(env.DB, id, now - WEEK),
         db.uptimeStats(env.DB, id, now - MONTH),
         db.uptimeStats(env.DB, id, now - YEAR),
-        db.incidents(env.DB, id, now - DAY),
-        db.incidents(env.DB, id, now - WEEK),
-        db.incidents(env.DB, id, now - MONTH),
-        db.incidents(env.DB, id, now - YEAR),
+        db.rawChecksSince(env.DB, id, now - YEAR),
         db.latencyStats(env.DB, id, now - DAY),
         db.latencyStats(env.DB, id, now - MONTH),
         db.latencySeries(env.DB, id, now - DAY),
         findStateSince(env, id, isUp),
     ]);
+    const incidents24h = db.incidentsFromRows(yearRows, now - DAY);
+    const incidents7d = db.incidentsFromRows(yearRows, now - WEEK);
+    const incidents30d = db.incidentsFromRows(yearRows, now - MONTH);
+    const incidents365d = db.incidentsFromRows(yearRows, now - YEAR);
 
     return {
         id: t.id, name: t.name, type: t.type, host: t.host, port: t.port, config: t.config, tags: t.tags,

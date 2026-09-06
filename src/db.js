@@ -2,6 +2,39 @@ const DAY = 24 * 60 * 60 * 1000;
 const WEEK = 7 * DAY;
 const YEAR = 365 * DAY;
 
+function groupIncidents(rows) {
+    const out = [];
+    let current = null;
+    let pendingFail = null; // first failed check of a streak, not yet confirmed
+    for (const row of rows) {
+        if (row.is_up === 0) {
+            if (current) {
+                current.end = row.checked_at;
+            } else if (pendingFail) {
+                current = { start: pendingFail.checked_at, end: row.checked_at, reason: pendingFail.reason };
+                pendingFail = null;
+            } else {
+                pendingFail = { checked_at: row.checked_at, reason: row.fail_reason };
+            }
+        } else {
+            if (current) {
+                current.end = row.checked_at;
+                out.push(current);
+                current = null;
+            }
+            pendingFail = null;
+        }
+    }
+    if (current) {
+        current.end = Date.now();
+        current.ongoing = true;
+        out.push(current);
+    }
+
+    const totalDownMs = out.reduce((sum, i) => sum + (i.end - i.start), 0);
+    return { list: out, count: out.length, totalDownMs };
+}
+
 function parseTarget(row) {
     if (!row) return row;
     let config = {};
@@ -157,47 +190,41 @@ export async function incidents(db, targetId, sinceMs) {
         `SELECT is_up, checked_at, fail_reason FROM checks
          WHERE target_id = ? AND checked_at > ? ORDER BY checked_at ASC`
     ).bind(targetId, sinceMs).all();
+    return groupIncidents(results);
+}
 
-    const out = [];
-    let current = null;
-    let pendingFail = null; // first failed check of a streak, not yet confirmed
-    for (const row of results) {
-        if (row.is_up === 0) {
-            if (current) {
-                current.end = row.checked_at;
-            } else if (pendingFail) {
-                current = { start: pendingFail.checked_at, end: row.checked_at, reason: pendingFail.reason };
-                pendingFail = null;
-            } else {
-                pendingFail = { checked_at: row.checked_at, reason: row.fail_reason };
-            }
-        } else {
-            if (current) {
-                current.end = row.checked_at;
-                out.push(current);
-                current = null;
-            }
-            pendingFail = null;
-        }
-    }
-    if (current) {
-        current.end = Date.now();
-        current.ongoing = true;
-        out.push(current);
-    }
+// Raw checks for a target since sinceMs, for callers that need incidents()
+// over several overlapping windows (see buildDetailData) -- fetch once for
+// the widest window, then group each narrower window's slice in memory
+// instead of re-querying the DB per window.
+export async function rawChecksSince(db, targetId, sinceMs) {
+    const { results } = await db.prepare(
+        `SELECT is_up, checked_at, fail_reason FROM checks
+         WHERE target_id = ? AND checked_at > ? ORDER BY checked_at ASC`
+    ).bind(targetId, sinceMs).all();
+    return results;
+}
 
-    const totalDownMs = out.reduce((sum, i) => sum + (i.end - i.start), 0);
-    return { list: out, count: out.length, totalDownMs };
+export function incidentsFromRows(rows, sinceMs) {
+    return groupIncidents(rows.filter((r) => r.checked_at > sinceMs));
 }
 
 // All incidents across every target, newest-first, for the global Incidents
 // page. Reuses the per-target grouping above rather than a single complex
 // SQL query -- fine at the scale this tool actually runs at.
+//
+// Bounded to the last year: with `sinceMs = 0` this used to re-scan every
+// check ever recorded, per target, on every page view -- fine when the
+// checks table was small, but it grew into a multi-million-row full-history
+// scan on each hit of this public, unauthenticated page and was the single
+// biggest driver of D1's account-wide daily row-read quota getting blown
+// through (see incident 2026-09-06).
 export async function allIncidents(db, limit = 200) {
     const targets = await listTargets(db);
+    const sinceMs = Date.now() - YEAR;
     const out = [];
     for (const t of targets) {
-        const { list } = await incidents(db, t.id, 0);
+        const { list } = await incidents(db, t.id, sinceMs);
         for (const inc of list) {
             out.push({ targetId: t.id, targetName: t.name, start: inc.start, end: inc.end, ongoing: !!inc.ongoing, reason: inc.reason });
         }
