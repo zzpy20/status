@@ -1,5 +1,6 @@
 const DAY = 24 * 60 * 60 * 1000;
 const WEEK = 7 * DAY;
+const MONTH = 30 * DAY;
 const YEAR = 365 * DAY;
 
 function groupIncidents(rows) {
@@ -56,7 +57,15 @@ export async function statusRows(db) {
         // Last *confirmed* incident, not just the last lone failed check --
         // otherwise a single blip that never became a real incident still
         // shows up here, contradicting the incidents list on the detail page.
-        const recentIncidents = await incidents(db, t.id, now - YEAR);
+        //
+        // Bounded to the last week, not YEAR: this runs per target on every
+        // hit of `/` and `/api/status` -- the most-visited routes -- and a
+        // YEAR cutoff is *not actually bounded* while `checks` is younger
+        // than a year old (it was, until 2026-09-07), so it silently scanned
+        // the entire table on every homepage view. That alone was enough to
+        // exhaust the account's shared D1 daily row-read quota from normal,
+        // light personal use -- see docs/incidents/2026-09-06-d1-quota-exhaustion.md.
+        const recentIncidents = await incidents(db, t.id, now - WEEK);
         const lastIncident = recentIncidents.list[recentIncidents.list.length - 1];
         return {
             id: t.id,
@@ -213,15 +222,22 @@ export function incidentsFromRows(rows, sinceMs) {
 // page. Reuses the per-target grouping above rather than a single complex
 // SQL query -- fine at the scale this tool actually runs at.
 //
-// Bounded to the last year: with `sinceMs = 0` this used to re-scan every
-// check ever recorded, per target, on every page view -- fine when the
+// Bounded to the last month. This originally used `sinceMs = 0`, re-scanning
+// every check ever recorded, per target, on every page view -- fine when the
 // checks table was small, but it grew into a multi-million-row full-history
 // scan on each hit of this public, unauthenticated page and was the single
 // biggest driver of D1's account-wide daily row-read quota getting blown
-// through (see incident 2026-09-06).
+// through on 2026-09-06. A first fix bounded this to YEAR instead, but that
+// was a no-op the moment it shipped: `checks` was only ~2 months old, so
+// "the last year" and "the entire table" were the same query. Since the
+// table is never pruned, that would only have become a real bound once the
+// app had been running for over a year -- and by then it'd bound to ~4M+
+// rows anyway. Bounding by *time* only pays off once the window is smaller
+// than the table's actual age; MONTH actually is, today and for the
+// foreseeable future. See docs/incidents/2026-09-06-d1-quota-exhaustion.md.
 export async function allIncidents(db, limit = 200) {
     const targets = await listTargets(db);
-    const sinceMs = Date.now() - YEAR;
+    const sinceMs = Date.now() - MONTH;
     const out = [];
     for (const t of targets) {
         const { list } = await incidents(db, t.id, sinceMs);

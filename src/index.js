@@ -75,14 +75,17 @@ async function buildDetailData(env, id) {
 
     // Incidents for DAY/WEEK/MONTH/YEAR all overlap (each is a subset of
     // YEAR), so fetch the raw checks once for the widest window and group
-    // each narrower window in memory instead of re-querying the DB 4x per
-    // page view -- that repeated full-year rescan was a major contributor
-    // to D1's account-wide daily row-read quota getting exhausted.
-    const [uptime24h, uptime7d, uptime30d, uptime365d, yearRows, latency24h, latency30d, latencySeries, stateSince] = await Promise.all([
+    // each narrower window -- and derive uptime365d -- from that same
+    // in-memory result instead of separately re-querying the DB for each.
+    // This used to be 5 separate full-year-capable DB round trips per page
+    // view (4x incidents() + uptimeStats(YEAR)); now it's 1. That repeated
+    // rescanning was a major contributor to D1's account-wide daily
+    // row-read quota getting exhausted -- see
+    // docs/incidents/2026-09-06-d1-quota-exhaustion.md.
+    const [uptime24h, uptime7d, uptime30d, yearRows, latency24h, latency30d, latencySeries, stateSince] = await Promise.all([
         db.uptimeStats(env.DB, id, now - DAY),
         db.uptimeStats(env.DB, id, now - WEEK),
         db.uptimeStats(env.DB, id, now - MONTH),
-        db.uptimeStats(env.DB, id, now - YEAR),
         db.rawChecksSince(env.DB, id, now - YEAR),
         db.latencyStats(env.DB, id, now - DAY),
         db.latencyStats(env.DB, id, now - MONTH),
@@ -93,6 +96,11 @@ async function buildDetailData(env, id) {
     const incidents7d = db.incidentsFromRows(yearRows, now - WEEK);
     const incidents30d = db.incidentsFromRows(yearRows, now - MONTH);
     const incidents365d = db.incidentsFromRows(yearRows, now - YEAR);
+    const upCount365d = yearRows.reduce((sum, r) => sum + r.is_up, 0);
+    const uptime365d = {
+        pct: yearRows.length ? (upCount365d * 100.0 / yearRows.length) : null,
+        samples: yearRows.length,
+    };
 
     return {
         id: t.id, name: t.name, type: t.type, host: t.host, port: t.port, config: t.config, tags: t.tags,
@@ -109,6 +117,40 @@ function stripNotes(rows) {
     return rows.map(({ notes, ...rest }) => rest);
 }
 
+// Edge-caches a computed response for a few seconds on Cloudflare's own
+// Cache API -- separate from (and much shorter than) any browser cache, and
+// the client still always gets `Cache-Control: no-store` so this can't
+// reproduce the stale-browser-cache bug noted on HTML_HEADERS above. This
+// exists purely to put a hard ceiling on how often the expensive per-target
+// D1 queries behind `/`, `/api/status`, `/monitor/:id` and `/incidents` can
+// re-run -- a burst of repeat views (a refreshing tab, a crawler, a
+// health-checker polling this status page) previously re-triggered the full
+// computation on every single request. checks only change once a minute
+// (the scheduled() cron interval), so anything under that is free
+// staleness. See docs/incidents/2026-09-06-d1-quota-exhaustion.md.
+const EDGE_CACHE_TTL_SECONDS = 20;
+
+async function withEdgeCache(request, ctx, compute) {
+    const cache = caches.default;
+    const cacheKey = new Request(request.url, { method: "GET" });
+    const hit = await cache.match(cacheKey);
+    if (hit) {
+        const clientRes = new Response(hit.body, hit);
+        clientRes.headers.set("cache-control", "no-store");
+        clientRes.headers.set("x-edge-cache", "HIT");
+        return clientRes;
+    }
+    const res = await compute();
+    if (res.ok) {
+        const cacheCopy = res.clone();
+        cacheCopy.headers.set("cache-control", `public, max-age=${EDGE_CACHE_TTL_SECONDS}`);
+        ctx.waitUntil(cache.put(cacheKey, cacheCopy));
+    }
+    res.headers.set("cache-control", "no-store");
+    res.headers.set("x-edge-cache", "MISS");
+    return res;
+}
+
 export default {
     async scheduled(event, env, ctx) {
         ctx.waitUntil(runChecks(env));
@@ -121,24 +163,31 @@ export default {
         const url = new URL(request.url);
 
         if (url.pathname === "/") {
-            const rows = stripNotes(await db.statusRows(env.DB));
-            return new Response(renderStatusPage(rows), { headers: HTML_HEADERS });
+            return withEdgeCache(request, ctx, async () => {
+                const rows = stripNotes(await db.statusRows(env.DB));
+                return new Response(renderStatusPage(rows), { headers: HTML_HEADERS });
+            });
         }
 
         if (url.pathname === "/api/status") {
-            return Response.json(stripNotes(await db.statusRows(env.DB)));
+            return withEdgeCache(request, ctx, async () =>
+                Response.json(stripNotes(await db.statusRows(env.DB))));
         }
 
         if (url.pathname.startsWith("/monitor/")) {
             const id = Number(url.pathname.split("/")[2]);
-            const data = await buildDetailData(env, id);
-            if (!data) return new Response("Not found", { status: 404 });
-            return new Response(renderDetailPage(data), { headers: HTML_HEADERS });
+            return withEdgeCache(request, ctx, async () => {
+                const data = await buildDetailData(env, id);
+                if (!data) return new Response("Not found", { status: 404 });
+                return new Response(renderDetailPage(data), { headers: HTML_HEADERS });
+            });
         }
 
         if (url.pathname === "/incidents") {
-            const incidents = await db.allIncidents(env.DB);
-            return new Response(renderIncidentsPage(incidents), { headers: HTML_HEADERS });
+            return withEdgeCache(request, ctx, async () => {
+                const incidents = await db.allIncidents(env.DB);
+                return new Response(renderIncidentsPage(incidents), { headers: HTML_HEADERS });
+            });
         }
 
         if (url.pathname === "/admin") {
