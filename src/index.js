@@ -17,6 +17,14 @@ const WEEK = 7 * DAY;
 const MONTH = 30 * DAY;
 const YEAR = 365 * DAY;
 
+// checks has no automatic cleanup otherwise -- it grows forever at roughly
+// one row per target per check interval. 400 days (a year plus a month of
+// margin) keeps everything buildDetailData's deliberate, labeled "365d"
+// stats need while still capping the table's eventual steady-state size,
+// instead of it growing without bound indefinitely. See
+// docs/incidents/2026-09-06-d1-quota-exhaustion.md.
+const CHECKS_RETENTION_MS = 400 * DAY;
+
 async function notifyStateChange(env, target, isUp) {
     const monitorUrl = `${env.PUBLIC_BASE_URL || ""}/monitor/${target.id}`;
     await notifyAll(env, {
@@ -157,6 +165,22 @@ export default {
         ctx.waitUntil(syncDnsAll(env).then((results) => {
             for (const r of results) console.log(JSON.stringify(r));
         }));
+
+        // Piggybacks on the existing every-minute trigger rather than adding
+        // a second cron entry -- this Cloudflare account is already at the
+        // free plan's 5-cron-trigger total (see
+        // Shenzhen-Reality/README.md/ARCHITECTURE.md). Runs once a day, at
+        // the single minute-tick this condition is true for, using
+        // event.scheduledTime (not Date.now()) so it's tied to the tick
+        // Cloudflare actually scheduled, not wall-clock skew.
+        const tick = new Date(event.scheduledTime);
+        if (tick.getUTCHours() === 3 && tick.getUTCMinutes() === 0) {
+            ctx.waitUntil(
+                db.pruneOldChecks(env.DB, event.scheduledTime - CHECKS_RETENTION_MS).then((deleted) => {
+                    if (deleted) console.log(`pruned ${deleted} checks older than ${CHECKS_RETENTION_MS / DAY} days`);
+                })
+            );
+        }
     },
 
     async fetch(request, env, ctx) {

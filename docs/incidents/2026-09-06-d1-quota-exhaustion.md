@@ -2,7 +2,7 @@
 
 **First occurrence:** 2026-09-06
 **Recurrence:** 2026-09-07 (quota exceeded again, notified 2026-09-08 ~00:13 UTC)
-**Status:** Resolved 2026-09-08 (deploy `09af6d8c`)
+**Status:** Resolved 2026-09-08 (deploy `09af6d8c`), retention policy added same day
 
 ## Impact
 
@@ -113,18 +113,56 @@ size, not just add a number where there wasn't one. This wasn't caught
 before shipping round 1 because the fix wasn't measured against the actual
 table size, just checked for logical correctness.
 
+## Round 3 — retention policy (2026-09-08, same day as round 2)
+
+The bounded queries (WEEK/MONTH) stay cheap regardless of total table size —
+that's the whole point of bounding by time instead of needing a cleanup job.
+But two things still scaled with the table's total size, unbounded, forever:
+
+- `buildDetailData()`'s deliberate, labeled 365-day uptime/incidents stat
+  (correctly not time-bounded down — it's supposed to show a full year), so
+  its cost would keep growing until the table passed a year old and then
+  stabilize around ~4M+ rows — high but bounded, protected by the 20s edge
+  cache, but still a permanently-rising number until it hit that ceiling.
+- `checks` itself, growing forever with no cleanup, at roughly one row per
+  target per check interval (~9,400 rows/day account-wide as of this
+  writing). Nothing was actively wrong yet, but "grows forever" is exactly
+  the shape of thing that turns into a future version of this same incident,
+  the moment anything reads it without a sufficiently tight bound.
+
+**Fix shipped:**
+
+- **`pruneOldChecks(db, beforeMs, batchSize = 5000)`** (`src/db.js`): deletes
+  rows older than a cutoff in batches, via
+  `DELETE FROM checks WHERE id IN (SELECT id FROM checks WHERE checked_at <
+  ? LIMIT ?)`, looping until a batch comes back under `batchSize`. Batched
+  rather than one unbounded `DELETE`, so even a large backlog can't itself
+  become a rows-written/read spike in one shot — the same failure shape
+  this whole incident already demonstrated once.
+- **Migration `0007_checks_retention_index.sql`**: adds
+  `idx_checks_checked_at`. The existing `idx_checks_target_id_time` has
+  `target_id` as its leading column, so a plain `checked_at < ?` predicate
+  with no `target_id` filter can't use it — without this new index, the
+  retention delete itself would fall back to a full table scan. Applied to
+  the remote DB (one-time cost: ~585K rows read to build it, same order of
+  magnitude as a single pre-fix homepage view) before deploying the code
+  that depends on it.
+- **Retention window: 400 days** (`CHECKS_RETENTION_MS` in `src/index.js`)
+  — a year plus a month of margin, so it never conflicts with the
+  legitimate 365-day stat. Confirmed via direct query against the live table
+  that 0 rows currently match (oldest row is ~62 days old), so the first
+  real prune won't run until roughly mid-2027 and even then only trims the
+  small daily overflow, not a backlog.
+- **Runs once a day, not on a new cron trigger.** This Cloudflare account is
+  already at the free plan's 5-cron-trigger cap (see
+  `Shenzhen-Reality/README.md`), the same constraint that's why
+  `dns-drift-sync.js` lives inside this Worker's cron instead of its own.
+  `scheduled()`'s existing `*/1 * * * *` trigger now also checks
+  `event.scheduledTime` and only calls `pruneOldChecks()` on the one
+  minute-tick per day where the UTC hour is 3 and the minute is 0.
+
 ## Follow-ups still open
 
-- **No retention policy.** `checks` is never pruned, so it grows forever.
-  The bounded queries (WEEK/MONTH) stay cheap regardless of total table
-  size — that's the point of bounding by time rather than needing a
-  cleanup job. But `buildDetailData()`'s deliberate, labeled 365-day
-  uptime/incidents stat is *not* time-bounded down (it's supposed to show a
-  full year), so its cost will keep growing until the table is a year old
-  (at which point it stabilizes around ~4M+ rows total, since older rows
-  fall out of its own YEAR window) — high but bounded, and now protected by
-  the 20s edge cache. Worth revisiting if that stat's cost becomes an issue
-  once the table passes the 1-year mark.
 - **Shared account-wide quota.** 5M rows/day is shared across all 10 D1
   databases on this account. A future project with the same class of bug
   would break every other project again, `status` included. Worth checking

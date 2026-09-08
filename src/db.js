@@ -141,6 +141,26 @@ export async function insertCheck(db, target, isUp, latencyMs, reason) {
     ).bind(target.name, target.id, target.host, target.port, isUp ? 1 : 0, latencyMs, isUp ? null : (reason || null), Date.now()).run();
 }
 
+// Deletes checks older than `beforeMs`, in batches -- a single unbounded
+// DELETE over however many hundred thousand rows have aged out since the
+// last run would itself be a spike in rows written/read, the same failure
+// shape as the incident this exists to prevent. `checked_at < ?` doesn't
+// match idx_checks_target_id_time's leading column (target_id), so this
+// relies on idx_checks_checked_at (migration 0007) to stay an index range
+// scan instead of a full table scan. Called once a day -- see
+// scheduled() in index.js -- not on every check.
+export async function pruneOldChecks(db, beforeMs, batchSize = 5000) {
+    let totalDeleted = 0;
+    for (;;) {
+        const { meta } = await db.prepare(
+            "DELETE FROM checks WHERE id IN (SELECT id FROM checks WHERE checked_at < ? LIMIT ?)"
+        ).bind(beforeMs, batchSize).run();
+        totalDeleted += meta.changes;
+        if (meta.changes < batchSize) break;
+    }
+    return totalDeleted;
+}
+
 // Most recent checks first (limit 2 by default), for debounced state below.
 export async function recentChecks(db, targetId, limit = 2) {
     const { results } = await db.prepare(
