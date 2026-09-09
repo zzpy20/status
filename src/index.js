@@ -18,12 +18,16 @@ const MONTH = 30 * DAY;
 const YEAR = 365 * DAY;
 
 // checks has no automatic cleanup otherwise -- it grows forever at roughly
-// one row per target per check interval. 400 days (a year plus a month of
-// margin) keeps everything buildDetailData's deliberate, labeled "365d"
-// stats need while still capping the table's eventual steady-state size,
-// instead of it growing without bound indefinitely. See
+// one row per target per check interval. Originally set to 400 days
+// (a year of margin past the legitimate 365d stat), back when that stat
+// and findStateSince() both depended on raw history directly. Neither does
+// anymore: daily_stats/incidents (migration 0008) and targets.state_since
+// (migration 0009) durably retain everything those need, independent of
+// how much raw history survives. What's left needing raw `checks` is only
+// the DAY-window stats and the rollups' own "today" blending -- a handful
+// of days is generous margin for that. See
 // docs/incidents/2026-09-06-d1-quota-exhaustion.md.
-const CHECKS_RETENTION_MS = 400 * DAY;
+const CHECKS_RETENTION_MS = WEEK;
 
 async function notifyStateChange(env, target, isUp) {
     const monitorUrl = `${env.PUBLIC_BASE_URL || ""}/monitor/${target.id}`;
@@ -73,23 +77,6 @@ async function runChecks(env) {
     return results;
 }
 
-// Finds when the target entered its current up/down state, by scanning back
-// from the latest check for the most recent transition.
-async function findStateSince(env, targetId, currentIsUp) {
-    const row = await env.DB.prepare(
-        `SELECT checked_at FROM checks
-         WHERE target_id = ? AND is_up = ?
-         ORDER BY checked_at DESC LIMIT 1`
-    ).bind(targetId, currentIsUp ? 0 : 1).first();
-    if (!row) return null; // never in the other state within retained history
-    const next = await env.DB.prepare(
-        `SELECT checked_at FROM checks
-         WHERE target_id = ? AND checked_at > ? AND is_up = ?
-         ORDER BY checked_at ASC LIMIT 1`
-    ).bind(targetId, row.checked_at, currentIsUp ? 1 : 0).first();
-    return next ? next.checked_at : row.checked_at;
-}
-
 async function buildDetailData(env, id) {
     const t = await db.getTarget(env.DB, id);
     if (!t) return null;
@@ -112,7 +99,7 @@ async function buildDetailData(env, id) {
     const [
         uptime24h, uptime7d, uptime30d, uptime365d,
         incidents24h, incidents7d, incidents30d, incidents365d,
-        latency24h, latency30d, latencySeries, stateSince,
+        latency24h, latency30d, latencySeries,
     ] = await Promise.all([
         db.uptimeStats(env.DB, id, now - DAY),
         db.uptimeStatsFast(env.DB, id, now - WEEK),
@@ -125,12 +112,15 @@ async function buildDetailData(env, id) {
         db.latencyStats(env.DB, id, now - DAY),
         db.latencyStatsFast(env.DB, id, now - MONTH),
         db.latencySeries(env.DB, id, now - DAY),
-        findStateSince(env, id, isUp),
     ]);
 
     return {
         id: t.id, name: t.name, type: t.type, host: t.host, port: t.port, config: t.config, tags: t.tags,
-        is_up: isUp, checked_at: last ? last.checked_at : null, stateSince,
+        // Was findStateSince(), an unbounded raw-checks scan re-run on every
+        // page view -- now a plain column, maintained incrementally by
+        // openIncident()/closeIncident() at the moment a transition is
+        // confirmed. See migration 0009.
+        is_up: isUp, checked_at: last ? last.checked_at : null, stateSince: t.state_since ?? null,
         uptime24h, uptime7d, uptime30d, uptime365d,
         incidents24h, incidents7d, incidents30d, incidents365d,
         latency24h, latency30d, latencySeries,

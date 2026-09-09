@@ -83,19 +83,21 @@ export async function handleAdminApi(request, env, url) {
         }
     }
 
-    // One-off historical backfill for the `incidents` table (see migration
-    // 0008 and docs/incidents/2026-09-06-d1-quota-exhaustion.md). daily_stats
-    // could be backfilled with a plain SQL GROUP BY (done directly in the
-    // migration), but incident boundaries depend on the 2-consecutive-
-    // failures debounce state machine, which isn't a plain aggregate --
-    // so this replays db.groupIncidents() (the same function the app used
-    // to call on every page view) once, here, against full raw history per
-    // target, and bulk-writes the result. Safe to re-run: always wipes and
-    // rebuilds rather than incrementing, so it can't double-count. Not
-    // wired into any schedule or public route -- admin-auth-gated and
-    // meant to be triggered by hand, once, after 0008 ships (or again if
-    // `incidents` and raw `checks` history are ever suspected to have
-    // drifted apart).
+    // One-off historical backfill for the `incidents` table and
+    // targets.state_since (see migrations 0008/0009 and
+    // docs/incidents/2026-09-06-d1-quota-exhaustion.md). daily_stats could
+    // be backfilled with a plain SQL GROUP BY (done directly in the
+    // migration), but incident boundaries -- and state_since, which is just
+    // the most recent incident's boundary -- depend on the 2-consecutive-
+    // failures debounce state machine, which isn't a plain aggregate. So
+    // this replays db.groupIncidents() (the same function the app used to
+    // call on every page view) once, here, against full raw history per
+    // target, and bulk-writes both from that single pass. Safe to re-run:
+    // always wipes and rebuilds rather than incrementing, so it can't
+    // double-count. Not wired into any schedule or public route --
+    // admin-auth-gated and meant to be triggered by hand, once, after 0008/
+    // 0009 ship (or again if `incidents`/state_since and raw `checks`
+    // history are ever suspected to have drifted apart).
     if (parts.length === 1 && parts[0] === "rebuild-incidents" && request.method === "POST") {
         await env.DB.prepare("DELETE FROM incidents").run();
         const targets = await db.listTargets(env.DB);
@@ -114,14 +116,22 @@ export async function handleAdminApi(request, env, url) {
                 if (results.length < 20000) break;
             }
             const { list } = db.groupIncidents(rows);
-            if (list.length) {
-                await env.DB.batch(list.map((inc) =>
-                    env.DB.prepare(
-                        "INSERT INTO incidents (target_id, start_at, end_at, reason) VALUES (?, ?, ?, ?)"
-                    ).bind(t.id, inc.start, inc.ongoing ? null : inc.end, inc.reason || null)
-                ));
-            }
-            summary.push({ target: t.name, checksScanned: rows.length, incidentsWritten: list.length });
+            const writes = list.map((inc) =>
+                env.DB.prepare(
+                    "INSERT INTO incidents (target_id, start_at, end_at, reason) VALUES (?, ?, ?, ?)"
+                ).bind(t.id, inc.start, inc.ongoing ? null : inc.end, inc.reason || null)
+            );
+            // Same rule as openIncident()/closeIncident(): state_since is
+            // the boundary of the target's most recent incident -- its
+            // start if still ongoing (currently down), else its end
+            // (currently up since that recovery). No incidents ever ->
+            // null, matching the old findStateSince()'s "never in the
+            // other state" case.
+            const lastInc = list[list.length - 1];
+            const stateSince = lastInc ? (lastInc.ongoing ? lastInc.start : lastInc.end) : null;
+            writes.push(env.DB.prepare("UPDATE targets SET state_since = ? WHERE id = ?").bind(stateSince, t.id));
+            await env.DB.batch(writes);
+            summary.push({ target: t.name, checksScanned: rows.length, incidentsWritten: list.length, stateSince });
         }
         return Response.json({ ok: true, summary });
     }

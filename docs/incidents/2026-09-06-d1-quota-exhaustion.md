@@ -4,7 +4,8 @@
 **Recurrence:** 2026-09-07 (quota exceeded again, notified 2026-09-08 ~00:13 UTC)
 **Recurrence:** 2026-09-08 (self-inflicted by debugging, see Round 3.5 -- no code change needed)
 **Status:** Resolved 2026-09-09 with rollup tables (Round 4) replacing the read-heavy pattern
-directly, not just bounding it further
+directly, not just bounding it further, and closed out (Round 5) by removing the
+last unbounded raw-checks scan and cutting checks retention from 400 days to 7
 
 ## Impact
 
@@ -277,6 +278,44 @@ instead of a true (very old) transition time for a target that's been
 stable longer than the retention window -- a real but narrow trade-off,
 not evaluated further here.
 
+## Round 5 — closing the last gap: `state_since` + a write-quota guard (2026-09-09)
+
+Round 4 left one function still doing an unbounded raw-checks scan:
+`findStateSince()` ("stable since X"), which looked for the most recent
+opposite-state check with no time bound at all. It was the reason
+`CHECKS_RETENTION_MS` was kept at 400 days -- shrinking retention further
+would have made it start reporting "unknown" for any long-stable target.
+
+**Fix:** `targets.state_since` (migration `0009_state_since.sql`), updated
+by `openIncident()`/`closeIncident()` at the exact same moment they already
+write -- the instant a transition is confirmed *is* the answer to "since
+when", so no separate scan is needed at all. Backfilled in the same
+`rebuild-incidents` pass (it already computes each target's incident list;
+`state_since` is just that list's last boundary -- its start if still
+ongoing, else its end). `findStateSince()` deleted outright.
+
+With that gap closed, nothing in the live app depends on raw `checks` older
+than about a day (the DAY-window stats, and the rollup functions' "today"
+blending). `CHECKS_RETENTION_MS`: 400 days -> `WEEK`, a >50x reduction,
+with no loss -- not even the narrow edge case Round 4 flagged.
+
+**Caught before it shipped, not after:** shrinking retention that much in
+one step meant the very next scheduled prune would try to delete the
+~520,000-row backlog (everything older than a week, out of ~587K total) in
+a single run. `pruneOldChecks()` had no cap on total deletions per
+invocation -- only on delete-loop batch size (5,000) -- so it would have
+kept looping until fully caught up, trying to delete ~10x D1's free-tier
+100,000-rows-written daily cap in one shot. Same failure shape as this
+entire incident chain, just on the write side instead of the read side.
+Added a `maxTotal` cap (50,000/invocation, well under the write quota,
+leaving room for the day's normal check inserts) before deploying the
+retention change -- a large backlog now works itself down over ~11 nights
+instead of all at once. Deployed the migration, code, and this guard
+together; verified all four public routes still return 200 and that
+`state_since` renders correctly (a real backfilled value, e.g. "since 45d
+ago", and a graceful blank for a target that's never had a confirmed
+incident) before considering it done.
+
 ## Follow-ups still open
 
 - **Shared account-wide quota.** 5M rows/day is shared across all 10 D1
@@ -284,5 +323,3 @@ not evaluated further here.
   would break every other project again, `status` included. Worth checking
   new D1-backed projects for unbounded time-window queries before they ship,
   or considering the D1 paid tier if this keeps being a risk.
-- **`CHECKS_RETENTION_MS` could likely shrink further** now that
-  `daily_stats`/`incidents` don't depend on it -- see Round 4 above.

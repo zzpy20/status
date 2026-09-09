@@ -194,20 +194,31 @@ export async function insertCheck(db, target, isUp, latencyMs, reason, checkedAt
 
 // Opens a new incident row -- called once, at the exact moment runChecks()
 // confirms a down transition (the 2nd consecutive failed check), not
-// reconstructed later by replaying raw checks.
+// reconstructed later by replaying raw checks. Also stamps
+// targets.state_since with the same timestamp -- this *is* the moment the
+// target entered its current (down) state, so findStateSince()'s old
+// unbounded raw-checks scan for that answer is no longer needed at all;
+// see migration 0009.
 export async function openIncident(db, targetId, startAt, reason) {
-    await db.prepare(
-        "INSERT INTO incidents (target_id, start_at, end_at, reason) VALUES (?, ?, NULL, ?)"
-    ).bind(targetId, startAt, reason || null).run();
+    await db.batch([
+        db.prepare(
+            "INSERT INTO incidents (target_id, start_at, end_at, reason) VALUES (?, ?, NULL, ?)"
+        ).bind(targetId, startAt, reason || null),
+        db.prepare("UPDATE targets SET state_since = ? WHERE id = ?").bind(startAt, targetId),
+    ]);
 }
 
 // Closes this target's open incident (if any) -- called once, at the exact
 // moment runChecks() confirms recovery. `end_at IS NULL` is what
-// idx_incidents_open exists for.
+// idx_incidents_open exists for. Also stamps targets.state_since -- see
+// openIncident() above.
 export async function closeIncident(db, targetId, endAt) {
-    await db.prepare(
-        "UPDATE incidents SET end_at = ? WHERE target_id = ? AND end_at IS NULL"
-    ).bind(endAt, targetId).run();
+    await db.batch([
+        db.prepare(
+            "UPDATE incidents SET end_at = ? WHERE target_id = ? AND end_at IS NULL"
+        ).bind(endAt, targetId),
+        db.prepare("UPDATE targets SET state_since = ? WHERE id = ?").bind(endAt, targetId),
+    ]);
 }
 
 // Deletes checks older than `beforeMs`, in batches -- a single unbounded
@@ -218,14 +229,27 @@ export async function closeIncident(db, targetId, endAt) {
 // relies on idx_checks_checked_at (migration 0007) to stay an index range
 // scan instead of a full table scan. Called once a day -- see
 // scheduled() in index.js -- not on every check.
-export async function pruneOldChecks(db, beforeMs, batchSize = 5000) {
+// maxTotal caps how much a single invocation will ever delete. Ordinary
+// daily overflow (a day's worth of checks aging past the retention window)
+// is tiny -- this cap exists for the case where the retention window
+// itself just got shrunk a lot (as it did, 400 days -> 7, once daily_stats/
+// incidents/state_since stopped needing raw history to back them -- see
+// docs/incidents/2026-09-06-d1-quota-exhaustion.md), leaving a large
+// backlog. D1's free tier caps rows *written* at 100K/day same as it caps
+// rows read at 5M/day; deleting hundreds of thousands of backlogged rows in
+// one run would trade one quota exhaustion for another. Capped well under
+// that (leaving headroom for the day's normal check inserts), a large
+// backlog just works itself down gradually across however many days it
+// takes instead of all at once.
+export async function pruneOldChecks(db, beforeMs, batchSize = 5000, maxTotal = 50000) {
     let totalDeleted = 0;
-    for (;;) {
+    while (totalDeleted < maxTotal) {
+        const limit = Math.min(batchSize, maxTotal - totalDeleted);
         const { meta } = await db.prepare(
             "DELETE FROM checks WHERE id IN (SELECT id FROM checks WHERE checked_at < ? LIMIT ?)"
-        ).bind(beforeMs, batchSize).run();
+        ).bind(beforeMs, limit).run();
         totalDeleted += meta.changes;
-        if (meta.changes < batchSize) break;
+        if (meta.changes < limit) break; // fewer matching rows than asked for -- fully caught up
     }
     return totalDeleted;
 }
