@@ -356,6 +356,96 @@ export async function latencySeries(db, targetId, sinceMs, limit = 100) {
     return results.reverse();
 }
 
+// --- Below: a single-fetch alternative to uptimeStats()/latencyStats()/
+// latencySeries()/uptimeStatsFast()/latencyStatsFast(), for buildDetailData()
+// (index.js) specifically. That one page view needs "last 24h" stats AND
+// the "today so far" portion of three separate rollup windows (week/month/
+// year) AND a latency chart -- which, called independently, meant re-
+// scanning essentially the same raw rows in `checks` up to 6 times per
+// view. `now - DAY` is always a superset of "today" (today start is never
+// more than 24h in the past), so recentRawChecks() fetches that one range
+// once and everything below derives its answer from the same in-memory
+// array instead of a fresh query. See
+// docs/incidents/2026-09-06-d1-quota-exhaustion.md.
+export async function recentRawChecks(db, targetId, sinceMs) {
+    const { results } = await db.prepare(
+        `SELECT is_up, checked_at, latency_ms FROM checks
+         WHERE target_id = ? AND checked_at > ? ORDER BY checked_at ASC`
+    ).bind(targetId, sinceMs).all();
+    return results;
+}
+
+export function uptimeFromRows(rows) {
+    if (!rows.length) return { pct: null, samples: 0 };
+    const up = rows.reduce((sum, r) => sum + r.is_up, 0);
+    return { pct: up * 100.0 / rows.length, samples: rows.length };
+}
+
+export function latencyFromRows(rows) {
+    const withLatency = rows.filter((r) => r.latency_ms != null);
+    if (!withLatency.length) return { avg: null, min: null, max: null };
+    const sum = withLatency.reduce((s, r) => s + r.latency_ms, 0);
+    return {
+        avg: sum / withLatency.length,
+        min: Math.min(...withLatency.map((r) => r.latency_ms)),
+        max: Math.max(...withLatency.map((r) => r.latency_ms)),
+    };
+}
+
+export function latencySeriesFromRows(rows, limit = 100) {
+    return rows
+        .filter((r) => r.latency_ms != null)
+        .slice(-limit)
+        .map((r) => ({ checked_at: r.checked_at, latency_ms: r.latency_ms }));
+}
+
+// uptimeStatsFast()/latencyStatsFast() above, but given today's raw rows
+// (already fetched by the caller via recentRawChecks()) instead of running
+// their own "today" query. Still queries daily_stats for the complete-days
+// portion -- that's a different table/range per window (week/month/year),
+// so it can't be folded into the single raw fetch the same way.
+// rows may span further back than "today" (e.g. buildDetailData passes the
+// full `now - DAY` fetch, not a pre-filtered slice) -- filtered to
+// `>= todayStart` here rather than trusted from the caller, so this can't
+// silently double-count yesterday's tail against the rollup sum below,
+// which already includes all of yesterday as a complete day.
+export async function uptimeStatsFastFromRows(db, targetId, sinceMs, rows) {
+    const dayStart = Math.floor(sinceMs / DAY) * DAY;
+    const todayStart = Math.floor(Date.now() / DAY) * DAY;
+    const todayRows = rows.filter((r) => r.checked_at >= todayStart);
+    const rollup = await db.prepare(
+        `SELECT SUM(up_count) AS up, SUM(up_count + down_count) AS total
+         FROM daily_stats WHERE target_id = ? AND day >= ? AND day < ?`
+    ).bind(targetId, dayStart, todayStart).first();
+    const todayUp = todayRows.reduce((sum, r) => sum + r.is_up, 0);
+    const up = (rollup?.up || 0) + todayUp;
+    const total = (rollup?.total || 0) + todayRows.length;
+    return { pct: total ? (up * 100.0 / total) : null, samples: total };
+}
+
+// Same "filter to today, not trusted from caller" reasoning as
+// uptimeStatsFastFromRows() above.
+export async function latencyStatsFastFromRows(db, targetId, sinceMs, rows) {
+    const dayStart = Math.floor(sinceMs / DAY) * DAY;
+    const todayStart = Math.floor(Date.now() / DAY) * DAY;
+    const todayRows = rows.filter((r) => r.checked_at >= todayStart);
+    const rollup = await db.prepare(
+        `SELECT SUM(latency_sum) AS sum, SUM(latency_count) AS count, MIN(latency_min) AS min, MAX(latency_max) AS max
+         FROM daily_stats WHERE target_id = ? AND day >= ? AND day < ?`
+    ).bind(targetId, dayStart, todayStart).first();
+    const todayWithLatency = todayRows.filter((r) => r.latency_ms != null);
+    const todaySum = todayWithLatency.reduce((s, r) => s + r.latency_ms, 0);
+    const sum = (rollup?.sum || 0) + todaySum;
+    const count = (rollup?.count || 0) + todayWithLatency.length;
+    const mins = [rollup?.min, ...todayWithLatency.map((r) => r.latency_ms)].filter((v) => v != null);
+    const maxs = [rollup?.max, ...todayWithLatency.map((r) => r.latency_ms)].filter((v) => v != null);
+    return {
+        avg: count ? (sum / count) : null,
+        min: mins.length ? Math.min(...mins) : null,
+        max: maxs.length ? Math.max(...maxs) : null,
+    };
+}
+
 // Incidents overlapping the window since sinceMs, for one target -- reads
 // the incidents table directly instead of reconstructing from raw checks.
 // That table has one row per actual incident (rare) rather than one per

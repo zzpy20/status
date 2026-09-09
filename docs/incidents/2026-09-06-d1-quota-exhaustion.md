@@ -370,6 +370,45 @@ alert threshold -- consistent with no alert firing). Kept the read-only
 rather than removing it, since it's genuinely useful for checking current
 usage by hand.
 
+## Round 7 — deduping the redundant "today" scan (2026-09-09)
+
+While explaining the app's data model in plain terms (how many rows a
+50-100 target deployment would read/write per day), found that
+`buildDetailData()` (`/monitor/:id`) was still re-scanning essentially the
+same raw `checks` rows up to 6 times per page view: `uptimeStats`/
+`latencyStats` (24h), `latencySeries` (chart), and -- inside
+`uptimeStatsFast`/`latencyStatsFast` -- a fresh "today so far" query for
+*each* of the week/month/year windows, none of them sharing results with
+each other. An oversight left over from the Round 4 rollup rewrite, which
+deduped the *incidents* side of this same problem but not the *uptime/
+latency* side.
+
+**Fix:** `recentRawChecks()` fetches `checked_at > now - DAY` once (this
+range is always a superset of "today so far", since today's start is never
+more than 24h in the past). `uptimeFromRows()`/`latencyFromRows()`/
+`latencySeriesFromRows()` derive the 24h stats and chart from that same
+array in memory. `uptimeStatsFastFromRows()`/`latencyStatsFastFromRows()`
+take it too, filtering internally to just today's slice before combining
+with each window's `daily_stats` rollup sum -- filtered *inside* the
+function rather than trusted from the caller, so passing the wider
+`now - DAY` array in can't silently double-count yesterday's tail against
+the rollup (which already includes all of yesterday as a complete day) --
+caught and fixed before deploying, not after.
+
+Cuts `buildDetailData()` from up to 6 raw-checks scans per page view down
+to 1. Verified: rendered figures on `/monitor/1` (uptime %, incident
+counts, "since Nd ago") matched the exact values recorded before this
+change byte-for-byte, and `wrangler tail` showed zero exceptions on a
+fresh request -- stronger evidence than `wrangler d1 insights`, whose
+discovery of brand-new query shapes lagged past waiting.
+
+**Why this came up now:** answering "would 50-100 targets blow the
+quota?" honestly required doing the write-volume math (~2 rows written
+per target per check -- linear in target count, crosses the 100K/day
+write cap around 35 targets checked every minute) and re-examining the
+read side for exactly this kind of per-view redundancy, rather than just
+asserting the app was scale-proof.
+
 ## Follow-ups still open
 
 - **Shared account-wide quota.** 5M rows/day is shared across all 10 D1
@@ -383,3 +422,14 @@ usage by hand.
   rejected -- it would retire this entire risk category outright, at a
   cost that's trivial next to the time this chain of incidents has taken
   to fix properly. Worth revisiting.
+- **Write volume scales linearly with target count and check frequency,
+  unaddressed.** At the current 1-check-per-minute cadence, each target
+  writes ~2 rows/check (`checks` + `daily_stats`) -- ~23,000 writes/day
+  account-wide at 8 targets (23% of the 100K/day free-tier write cap), but
+  that crosses the cap entirely around **35 targets** checked every
+  minute, with no other change. Unlike everything fixed in rounds 1-7,
+  this isn't a bug -- it's a real, linear resource cost of the check
+  frequency and target count you actually choose. Only relevant if
+  `status` grows well past its current 8 targets; not touched, since it
+  isn't a defect to fix, just a ceiling to know about (checking less
+  often, e.g. every 5 minutes, raises it roughly 5x).

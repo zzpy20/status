@@ -82,9 +82,6 @@ async function buildDetailData(env, id) {
     const t = await db.getTarget(env.DB, id);
     if (!t) return null;
     const now = Date.now();
-    const recent = await db.recentChecks(env.DB, id);
-    const last = recent[0] ?? null;
-    const isUp = db.confirmedIsUp(recent);
 
     // uptime/latency for WEEK/MONTH/YEAR read the daily_stats rollup
     // (updated incrementally by insertCheck()) instead of rescanning raw
@@ -97,23 +94,38 @@ async function buildDetailData(env, id) {
     // windows, and were a major contributor to D1's account-wide daily
     // row-read quota getting exhausted -- see
     // docs/incidents/2026-09-06-d1-quota-exhaustion.md.
+    //
+    // The WEEK/MONTH/YEAR rollups and latencyStatsFast's MONTH window each
+    // still need "today so far", since a day's daily_stats row isn't
+    // finalized until the day ends -- and so does the 24h/latency24h/chart
+    // data below. Querying that separately per caller meant re-scanning
+    // essentially the same raw rows up to 6 times per page view. Fetched
+    // once here (recentRawChecks, `now - DAY` -- always a superset of
+    // "today so far") and reused via the *FromRows() variants instead.
+    const [recent, rawDay] = await Promise.all([
+        db.recentChecks(env.DB, id),
+        db.recentRawChecks(env.DB, id, now - DAY),
+    ]);
+    const last = recent[0] ?? null;
+    const isUp = db.confirmedIsUp(recent);
+
     const [
-        uptime24h, uptime7d, uptime30d, uptime365d,
+        uptime7d, uptime30d, uptime365d,
         incidents24h, incidents7d, incidents30d, incidents365d,
-        latency24h, latency30d, latencySeries,
+        latency30d,
     ] = await Promise.all([
-        db.uptimeStats(env.DB, id, now - DAY),
-        db.uptimeStatsFast(env.DB, id, now - WEEK),
-        db.uptimeStatsFast(env.DB, id, now - MONTH),
-        db.uptimeStatsFast(env.DB, id, now - YEAR),
+        db.uptimeStatsFastFromRows(env.DB, id, now - WEEK, rawDay),
+        db.uptimeStatsFastFromRows(env.DB, id, now - MONTH, rawDay),
+        db.uptimeStatsFastFromRows(env.DB, id, now - YEAR, rawDay),
         db.recentIncidents(env.DB, id, now - DAY),
         db.recentIncidents(env.DB, id, now - WEEK),
         db.recentIncidents(env.DB, id, now - MONTH),
         db.recentIncidents(env.DB, id, now - YEAR),
-        db.latencyStats(env.DB, id, now - DAY),
-        db.latencyStatsFast(env.DB, id, now - MONTH),
-        db.latencySeries(env.DB, id, now - DAY),
+        db.latencyStatsFastFromRows(env.DB, id, now - MONTH, rawDay),
     ]);
+    const uptime24h = db.uptimeFromRows(rawDay);
+    const latency24h = db.latencyFromRows(rawDay);
+    const latencySeries = db.latencySeriesFromRows(rawDay, 100);
 
     return {
         id: t.id, name: t.name, type: t.type, host: t.host, port: t.port, config: t.config, tags: t.tags,
