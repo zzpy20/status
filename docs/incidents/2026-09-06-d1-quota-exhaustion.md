@@ -316,10 +316,70 @@ together; verified all four public routes still return 200 and that
 ago", and a graceful blank for a target that's never had a confirmed
 incident) before considering it done.
 
+## Round 6 — hardening the sibling project + a proactive alert (2026-09-09)
+
+Everything above fixed `status` itself. Two things were still true afterward:
+`links-db` (a completely unrelated project, `my-links-app`) shares this same
+account-wide quota and had the *same shape* of bug -- unbounded full-table
+scans on page-load-frequency routes, just cheap today because its table is
+small; and Cloudflare has **no built-in proactive alert for D1 usage at
+all** (checked directly in the dashboard's Notifications settings --
+"Usage Based Billing" alerts only cover R2 Storage). Every one of the
+rounds above was discovered the same way: after the fact, via Cloudflare's
+"you're now blocked" email.
+
+**`my-links-app` hardening** (that repo's own commit, not this one):
+`public-worker` (the public read-only view) ran its DB query unconditionally
+for *every* request, any path, unauthenticated -- fixed to only run for
+`GET /`, plus the same short edge-cache pattern used here. `worker` (the
+admin app): `/tags`, `/tags-admin`, `/collections-data` all scan the whole
+`links` table with no `LIMIT` on every page load -- same shape as this
+incident's root cause, currently cheap only because that table is small.
+Added the same edge-cache pattern (session-aware, since two of the three
+vary by an `unlocked` cookie -- a cached response from one lock state can't
+leak into the other), removed `/collections-data`'s per-request
+`CREATE TABLE`/`ALTER TABLE` (confirmed live that both already exist), and
+clamped `GET /links`'s previously-uncapped `perPage` parameter.
+
+**Proactive D1 usage monitor** (`src/usage-monitor.js`, migration
+`0010_usage_alerts.sql`): queries Cloudflare's GraphQL Analytics API
+(`d1AnalyticsAdaptiveGroups`) every 15 minutes -- piggybacked on the
+existing cron via the same `% 15 === 0` gate pattern as the other jobs, not
+a new trigger -- for today's account-wide `rowsRead`/`rowsWritten` across
+every D1 database on the account. Sends one Telegram alert per UTC day
+(deduped via a tiny `usage_alerts` table) if either crosses 70% of the
+free-tier cap, naming the top databases by usage so the alert is
+immediately actionable. This call itself doesn't touch D1 at all -- it's a
+separate Analytics API, doesn't consume any of the quota it's watching.
+
+Required a new, narrowly-scoped Cloudflare API token (`D1_USAGE_TOKEN`
+secret) -- Account Analytics: Read only, nothing else -- created via the
+dashboard. (First attempt at capturing the token value from a screenshot
+was subtly wrong on ambiguous characters and came back "Invalid API
+Token"; rolled it and re-captured via the page's DOM text instead of
+visual reading, which resolved it.)
+
+**Verified, not assumed:** used the GraphQL API directly via `curl` first
+to confirm the query shape and available fields before writing any Worker
+code against it. After deploying, confirmed the real `scheduled()` handler
+executed the check at the correct `:45` tick with no exceptions (via
+`wrangler tail`), and cross-checked its computed usage against a direct
+query at the same moment (69.4% read quota used, correctly under the 70%
+alert threshold -- consistent with no alert firing). Kept the read-only
+`GET /admin/api/check-d1-usage` debug endpoint as a permanent small utility
+rather than removing it, since it's genuinely useful for checking current
+usage by hand.
+
 ## Follow-ups still open
 
 - **Shared account-wide quota.** 5M rows/day is shared across all 10 D1
   databases on this account. A future project with the same class of bug
-  would break every other project again, `status` included. Worth checking
-  new D1-backed projects for unbounded time-window queries before they ship,
-  or considering the D1 paid tier if this keeps being a risk.
+  would break every other project again, `status` included -- mitigated
+  but not eliminated by the Round 6 monitor (it warns at 70%, it doesn't
+  prevent the underlying query from running). Worth checking new D1-backed
+  projects for unbounded time-window queries before they ship.
+- **The D1 paid tier** ($5/month minimum -> 25 billion rows read + 50M
+  written per month) was considered and deliberately deferred, not
+  rejected -- it would retire this entire risk category outright, at a
+  cost that's trivial next to the time this chain of incidents has taken
+  to fix properly. Worth revisiting.

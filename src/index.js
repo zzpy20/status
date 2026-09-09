@@ -6,6 +6,7 @@ import { notifyAll } from "./notify.js";
 import { formatBrisbaneTime } from "./time.js";
 import { targetIdentifier } from "./identifier.js";
 import { syncDnsAll } from "./dns-drift-sync.js";
+import { checkD1UsageAndAlert } from "./usage-monitor.js";
 
 // no-store on every HTML response -- this bit us twice already (Reset,
 // then the detail-page nav fix) where a browser/mobile-Safari cached page
@@ -188,6 +189,15 @@ export default {
                     if (deleted) console.log(`pruned ${deleted} checks older than ${CHECKS_RETENTION_MS / DAY} days`);
                 })
             );
+        }
+
+        // Same reasoning as the retention job above (piggyback, not a new
+        // trigger) but every 15 minutes rather than once a day -- this is
+        // the thing that would have caught every round of
+        // docs/incidents/2026-09-06-d1-quota-exhaustion.md same-day instead
+        // of via Cloudflare's after-the-fact blocked-request email.
+        if (tick.getUTCMinutes() % 15 === 0) {
+            ctx.waitUntil(checkD1UsageAndAlert(env));
         }
     },
 

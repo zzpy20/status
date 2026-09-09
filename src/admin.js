@@ -2,6 +2,7 @@ import * as db from "./db.js";
 import { notifyAll } from "./notify.js";
 import { formatBrisbaneTime } from "./time.js";
 import { targetIdentifier } from "./identifier.js";
+import { fetchD1UsageToday } from "./usage-monitor.js";
 
 function unauthorized() {
     return new Response("Unauthorized", { status: 401 });
@@ -134,6 +135,21 @@ export async function handleAdminApi(request, env, url) {
             summary.push({ target: t.name, checksScanned: rows.length, incidentsWritten: list.length, stateSince });
         }
         return Response.json({ ok: true, summary });
+    }
+
+    // On-demand view of today's account-wide D1 usage (same data
+    // checkD1UsageAndAlert() checks every 15 minutes), for checking the
+    // current number by hand without waiting for a threshold-crossing
+    // alert. Read-only, doesn't touch the alert dedup table. Verified
+    // end-to-end against the real deployment (2026-09-09) before keeping
+    // this. See docs/incidents/2026-09-06-d1-quota-exhaustion.md.
+    if (parts.length === 1 && parts[0] === "check-d1-usage" && request.method === "GET") {
+        try {
+            const usage = await fetchD1UsageToday(env);
+            return Response.json({ ok: true, usage });
+        } catch (err) {
+            return Response.json({ ok: false, error: err.message || String(err) }, { status: 500 });
+        }
     }
 
     return null;

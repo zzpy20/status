@@ -24,6 +24,11 @@ PUBLIC_BASE_URL = "https://status.1000600.xyz"
 # here (rather than its own Worker) because the Cloudflare account is
 # already at the 5-cron-trigger limit -- see Shenzhen-Reality/README.md.
 CF_ZONE_ID = "55a63d71052ea69b58411d1a128944e8"
+# Used by usage-monitor.js to query the account-wide D1 GraphQL Analytics
+# API (paired with the D1_USAGE_TOKEN secret, scoped to Account Analytics
+# Read only). Not sensitive -- it's the account ID, visible in every
+# dashboard URL already.
+CF_ACCOUNT_ID = "142bbf41fc952adb0ceb663375ef50d8"
 SZ_HOSTNAME = "shenzhen.1000600.xyz"
 SZ_REGION = "cn-shenzhen"
 SZ_INSTANCE_ID = "i-wz99bfloouzyb5fdaefu"
@@ -32,6 +37,14 @@ SG_REGION = "ap-southeast-1"
 SG_INSTANCE_ID = "i-t4nf6p5wwxfqp7qorusk"
 
 # TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, RESEND_API_KEY, OWNER_EMAIL,
-# ALIYUN_ACCESS_KEY_ID, ALIYUN_ACCESS_KEY_SECRET, and CF_API_TOKEN are all
-# Workers secrets (`wrangler secret put`), not plaintext vars here -- these
-# grant send/API access, none belong in this public repo. See README.
+# ALIYUN_ACCESS_KEY_ID, ALIYUN_ACCESS_KEY_SECRET, CF_API_TOKEN, and
+# D1_USAGE_TOKEN are all Workers secrets (`wrangler secret put`), not
+# plaintext vars here -- these grant send/API access, none belong in this
+# public repo. See README.
+#
+# D1_USAGE_TOKEN: a dedicated Cloudflare API token scoped to *only*
+# "Account Analytics: Read" (created via dash.cloudflare.com Account API
+# tokens, not the DNS-scoped CF_API_TOKEN above -- least-privilege, one
+# token per purpose, same reasoning as every other token in this account).
+# Used by usage-monitor.js to watch the account-wide D1 daily quota
+# proactively. See docs/incidents/2026-09-06-d1-quota-exhaustion.md.
