@@ -2,7 +2,9 @@
 
 **First occurrence:** 2026-09-06
 **Recurrence:** 2026-09-07 (quota exceeded again, notified 2026-09-08 ~00:13 UTC)
-**Status:** Resolved 2026-09-08 (deploy `09af6d8c`), retention policy added same day
+**Recurrence:** 2026-09-08 (self-inflicted by debugging, see Round 3.5 -- no code change needed)
+**Status:** Resolved 2026-09-09 with rollup tables (Round 4) replacing the read-heavy pattern
+directly, not just bounding it further
 
 ## Impact
 
@@ -161,6 +163,120 @@ But two things still scaled with the table's total size, unbounded, forever:
   `event.scheduledTime` and only calls `pruneOldChecks()` on the one
   minute-tick per day where the UTC hour is 3 and the minute is 0.
 
+## Round 3.5 — the quota was exceeded a 4th time (2026-09-08), self-inflicted
+
+Hours after round 3 shipped, the account hit the same quota again
+(Cloudflare's notification arrived 2026-09-09 ~00:13 UTC, for the exceedance
+during the 2026-09-08 UTC day). Investigated via `wrangler d1 insights
+status-uptime --time-period=1d`: **4,992,867 rows read that day, right at
+the ceiling** -- but the breakdown showed this was overwhelmingly
+self-inflicted by the debugging process itself, not a remaining application
+bug:
+
+- Two manual `SELECT COUNT(*)/MIN(checked_at)/MAX(checked_at) FROM checks`
+  diagnostic queries (run while sizing the retention window for round 3):
+  **1,756,521 rows** -- 35% of the entire day's budget, from 3 commands.
+- The round-3 fix's own bounded queries (now WEEK/MONTH-scale, not
+  effectively-unbounded YEAR-scale): ~2.8M rows from legitimate application
+  traffic -- consistent with the per-call cost already having dropped
+  ~82% (71,600 -> 12,847 avg rows/call), just multiplied by a lot of
+  verification requests during the same session.
+
+No code change resulted from this round -- the fix already shipped was
+correct; the lesson was procedural: **checking a table's actual size to
+design a fix (as round 2's postmortem recommended) itself costs rows, and a
+`COUNT(*)`/`MIN()`/`MAX()` over the full table is exactly as expensive as
+the bug being fixed.** Worth using `wrangler d1 insights` (aggregated
+analytics, doesn't consume the rows-read quota) over ad hoc `SELECT COUNT(*)`
+diagnostics against the live table when sizing a fix, and expecting that any
+live debugging against production D1 data during an active quota-sensitive
+incident has a real cost that should be budgeted for, not assumed free.
+
+## Round 4 — rollup tables (2026-09-09): fixing the actual design pattern
+
+Rounds 1-3 bounded *how much* raw history each query could scan and *how
+often* it could run, but left the underlying pattern unchanged: every page
+view recomputed uptime %, latency stats, and incident lists from scratch by
+scanning raw `checks` rows in the requested window. That cost is
+proportional to how much history has accumulated, not to how much actually
+changed -- a status page costs the same to render whether nothing happened
+that week or ten things did. That's fine at small scale and gets
+proportionally worse forever, which is why rounds 1-3 kept needing to
+re-tighten the same knob.
+
+**Fix:** two new tables, populated incrementally instead of recomputed on
+read (migration `0008_rollups.sql`):
+
+- **`daily_stats`** -- one row per (target, UTC day): `up_count`,
+  `down_count`, `latency_sum/count/min/max`. `insertCheck()` upserts the
+  current day's row on every check (batched with the `checks` insert, one
+  D1 round trip, atomic). `uptimeStatsFast()`/`latencyStatsFast()` sum the
+  rollup rows for every *complete* day in a window, plus a raw scan of just
+  *today's* still-accumulating checks for up-to-the-minute accuracy. This
+  rounds a window's start down to a whole UTC day (so "last 7 days" might
+  actually cover a few hours more than exactly 168h) -- inconsequential for
+  a percentage stat, in exchange for turning an O(days-in-window x
+  checks/day) scan into O(days-in-window) rollup rows + O(checks today).
+  Still used for the DAY window: `uptimeStats()`/`latencyStats()` keep
+  reading raw `checks` directly there, since that's already cheap
+  (~1,200 rows/target) and it's the one window where precision -- "right
+  now", not a settled period -- actually matters.
+- **`incidents`** -- one row per *actual incident* (a handful per target a
+  year, not one row per check). `runChecks()` (`index.js`) now calls
+  `db.openIncident()`/`db.closeIncident()` directly at the exact moment it
+  confirms a state transition (the same debounce check it already ran for
+  Telegram/email notifications), instead of every future page view
+  reconstructing incident boundaries by replaying raw checks through
+  `groupIncidents()`'s state machine. Verified the write-time logic exactly
+  reproduces `groupIncidents()`'s existing semantics (down confirmed on the
+  2nd consecutive failure, backdated to the 1st; recovery confirmed and
+  closed on the 1st success) before relying on it as the sole source of
+  truth. `recentIncidents()`/`lastIncidentEnd()`/`allIncidents()` now read
+  this table directly -- cheap and exact for any window, indefinitely,
+  regardless of how large `checks` ever gets.
+
+**Backfill:** `daily_stats` was backfilled with a single SQL
+`INSERT ... SELECT ... GROUP BY` in the migration itself (one full read of
+`checks` -- unavoidable for a from-source rebuild, but one-time). Hit one
+snag applying it: `checked_at`'s `target_id` is nullable, and 50 legacy
+checks (pre-dating migration 0002's target_id backfill) had `target_id IS
+NULL`, which violated `daily_stats.target_id`'s `NOT NULL` constraint --
+migration failed and rolled back cleanly (D1 migrations run as a
+transaction), fixed by excluding `target_id IS NULL` rows, then reapplied
+successfully. `incidents` couldn't be backfilled with plain SQL (the
+debounce state machine isn't a GROUP BY), so a temporary admin-auth-gated
+`POST /admin/api/rebuild-incidents` endpoint replays `groupIncidents()`
+against full raw history once per target and bulk-writes the result;
+left in place (not removed) as a documented, safe-to-rerun utility --
+always wipes and rebuilds rather than incrementing, so it can't
+double-count if triggered again.
+
+**Also fixed while touching this:** `resetTarget()`/`deleteTarget()` only
+cleared `checks`, which would have left stale `daily_stats`/`incidents`
+rows behind after a reset -- now clear all three tables together.
+
+**Verified, not assumed:** after deploying, compared `wrangler d1 insights`
+call counts immediately before and after a batch of test requests. The old
+expensive query (`SELECT is_up, checked_at, fail_reason FROM checks
+WHERE...`, the one that cost ~71,600 rows/call at its worst) had **zero new
+calls** from any of the four public routes -- confirming it's fully
+replaced on every live read path, not just supplemented. The backfill wrote
+38 real historical incidents across 8 targets (587K raw checks scanned to
+produce them), matching spot-checks against individual monitor pages.
+
+**Remaining headroom, not yet acted on:** `CHECKS_RETENTION_MS` (400 days,
+round 3) was sized around raw `checks` needing to back the legitimate
+365-day stat directly. That's no longer true -- `daily_stats` and
+`incidents` now retain that history durably and independently of raw
+`checks`. Raw history is only still needed for `findStateSince()` (how long
+a target's been in its current state, unbounded lookback) and the last
+~1-2 days for the rollup functions' "today" blending. Retention could
+likely be shortened substantially without losing anything the app
+currently surfaces, except `findStateSince()` would report "unknown"
+instead of a true (very old) transition time for a target that's been
+stable longer than the retention window -- a real but narrow trade-off,
+not evaluated further here.
+
 ## Follow-ups still open
 
 - **Shared account-wide quota.** 5M rows/day is shared across all 10 D1
@@ -168,3 +284,5 @@ But two things still scaled with the table's total size, unbounded, forever:
   would break every other project again, `status` included. Worth checking
   new D1-backed projects for unbounded time-window queries before they ship,
   or considering the D1 paid tier if this keeps being a risk.
+- **`CHECKS_RETENTION_MS` could likely shrink further** now that
+  `daily_stats`/`incidents` don't depend on it -- see Round 4 above.

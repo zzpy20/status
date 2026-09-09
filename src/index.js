@@ -41,10 +41,27 @@ async function runChecks(env) {
             const previousRows = await db.recentChecks(env.DB, target.id);
             const previousConfirmed = db.confirmedIsUp(previousRows);
             const { isUp, latencyMs, reason } = await runCheck(target);
-            await db.insertCheck(env.DB, target, isUp, latencyMs, reason);
+            const checkedAt = Date.now();
+            await db.insertCheck(env.DB, target, isUp, latencyMs, reason, checkedAt);
 
             const newConfirmed = db.confirmedIsUp([{ is_up: isUp ? 1 : 0 }, ...previousRows]);
             if (previousConfirmed !== null && previousConfirmed !== newConfirmed) {
+                // Writes the incidents row directly, at the exact moment the
+                // transition is confirmed -- the only place this ever needs
+                // deciding, instead of every future page view re-deriving it
+                // by replaying raw checks through the same debounce logic.
+                // Matches groupIncidents()' semantics exactly: a down
+                // incident's start is backdated to the *first* of the two
+                // consecutive failures (previousRows[0], not this
+                // confirming check), and recovery closes it at this check's
+                // own timestamp. See
+                // docs/incidents/2026-09-06-d1-quota-exhaustion.md.
+                if (newConfirmed === false) {
+                    const startAt = previousRows[0] ? previousRows[0].checked_at : checkedAt;
+                    await db.openIncident(env.DB, target.id, startAt, reason);
+                } else {
+                    await db.closeIncident(env.DB, target.id, checkedAt);
+                }
                 await notifyStateChange(env, target, newConfirmed);
             }
             results.push({ target: target.name, isUp, error: null });
@@ -81,34 +98,35 @@ async function buildDetailData(env, id) {
     const last = recent[0] ?? null;
     const isUp = db.confirmedIsUp(recent);
 
-    // Incidents for DAY/WEEK/MONTH/YEAR all overlap (each is a subset of
-    // YEAR), so fetch the raw checks once for the widest window and group
-    // each narrower window -- and derive uptime365d -- from that same
-    // in-memory result instead of separately re-querying the DB for each.
-    // This used to be 5 separate full-year-capable DB round trips per page
-    // view (4x incidents() + uptimeStats(YEAR)); now it's 1. That repeated
-    // rescanning was a major contributor to D1's account-wide daily
+    // uptime/latency for WEEK/MONTH/YEAR read the daily_stats rollup
+    // (updated incrementally by insertCheck()) instead of rescanning raw
+    // checks -- O(days-in-window) instead of O(checks-in-window). Incidents
+    // for every window read the `incidents` table directly (one row per
+    // actual incident, written once at the moment runChecks() confirms a
+    // transition) instead of being reconstructed by replaying raw checks
+    // through the debounce state machine on every page view. Both used to
+    // be full-history-capable DB scans, repeated across four overlapping
+    // windows, and were a major contributor to D1's account-wide daily
     // row-read quota getting exhausted -- see
     // docs/incidents/2026-09-06-d1-quota-exhaustion.md.
-    const [uptime24h, uptime7d, uptime30d, yearRows, latency24h, latency30d, latencySeries, stateSince] = await Promise.all([
+    const [
+        uptime24h, uptime7d, uptime30d, uptime365d,
+        incidents24h, incidents7d, incidents30d, incidents365d,
+        latency24h, latency30d, latencySeries, stateSince,
+    ] = await Promise.all([
         db.uptimeStats(env.DB, id, now - DAY),
-        db.uptimeStats(env.DB, id, now - WEEK),
-        db.uptimeStats(env.DB, id, now - MONTH),
-        db.rawChecksSince(env.DB, id, now - YEAR),
+        db.uptimeStatsFast(env.DB, id, now - WEEK),
+        db.uptimeStatsFast(env.DB, id, now - MONTH),
+        db.uptimeStatsFast(env.DB, id, now - YEAR),
+        db.recentIncidents(env.DB, id, now - DAY),
+        db.recentIncidents(env.DB, id, now - WEEK),
+        db.recentIncidents(env.DB, id, now - MONTH),
+        db.recentIncidents(env.DB, id, now - YEAR),
         db.latencyStats(env.DB, id, now - DAY),
-        db.latencyStats(env.DB, id, now - MONTH),
+        db.latencyStatsFast(env.DB, id, now - MONTH),
         db.latencySeries(env.DB, id, now - DAY),
         findStateSince(env, id, isUp),
     ]);
-    const incidents24h = db.incidentsFromRows(yearRows, now - DAY);
-    const incidents7d = db.incidentsFromRows(yearRows, now - WEEK);
-    const incidents30d = db.incidentsFromRows(yearRows, now - MONTH);
-    const incidents365d = db.incidentsFromRows(yearRows, now - YEAR);
-    const upCount365d = yearRows.reduce((sum, r) => sum + r.is_up, 0);
-    const uptime365d = {
-        pct: yearRows.length ? (upCount365d * 100.0 / yearRows.length) : null,
-        samples: yearRows.length,
-    };
 
     return {
         id: t.id, name: t.name, type: t.type, host: t.host, port: t.port, config: t.config, tags: t.tags,

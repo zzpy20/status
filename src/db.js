@@ -1,9 +1,26 @@
 const DAY = 24 * 60 * 60 * 1000;
 const WEEK = 7 * DAY;
-const MONTH = 30 * DAY;
-const YEAR = 365 * DAY;
 
-function groupIncidents(rows) {
+// Groups consecutive is_up=0 rows (in chronological order) into incidents.
+// A lone failed check is treated as noise, same as confirmedIsUp() below --
+// an incident is only confirmed once a second consecutive failure follows,
+// at which point its "start" is backdated to that first failed check (it
+// really was down from then, the second check just confirmed it wasn't a
+// blip). An incident's "end" is the timestamp it was next confirmed back up
+// (or "now" if still ongoing) -- using the last down check's own timestamp
+// would understate an incident's duration by up to one check interval. Each
+// incident's "reason" is the fail_reason of the check that started it --
+// what triggered the outage, not every reason seen during it if it changed.
+//
+// No longer used on any live read path -- runChecks() (index.js) now calls
+// openIncident()/closeIncident() directly at the moment a transition is
+// confirmed, and reads go through recentIncidents()/allIncidents() further
+// down, both backed by the resulting `incidents` table instead of replaying
+// raw checks through this state machine on every request. Kept exported
+// because it's the proven-correct reference implementation of the debounce
+// logic, reused by the one-off historical backfill in admin.js -- see
+// docs/incidents/2026-09-06-d1-quota-exhaustion.md.
+export function groupIncidents(rows) {
     const out = [];
     let current = null;
     let pendingFail = null; // first failed check of a streak, not yet confirmed
@@ -53,20 +70,17 @@ export async function statusRows(db) {
         const recent = await recentChecks(db, t.id);
         const last = recent[0] ?? null;
         const uptime24h = await uptimeStats(db, t.id, now - DAY);
-        const uptime7d = await uptimeStats(db, t.id, now - WEEK);
+        const uptime7d = await uptimeStatsFast(db, t.id, now - WEEK);
         // Last *confirmed* incident, not just the last lone failed check --
         // otherwise a single blip that never became a real incident still
         // shows up here, contradicting the incidents list on the detail page.
-        //
-        // Bounded to the last week, not YEAR: this runs per target on every
-        // hit of `/` and `/api/status` -- the most-visited routes -- and a
-        // YEAR cutoff is *not actually bounded* while `checks` is younger
-        // than a year old (it was, until 2026-09-07), so it silently scanned
-        // the entire table on every homepage view. That alone was enough to
-        // exhaust the account's shared D1 daily row-read quota from normal,
-        // light personal use -- see docs/incidents/2026-09-06-d1-quota-exhaustion.md.
-        const recentIncidents = await incidents(db, t.id, now - WEEK);
-        const lastIncident = recentIncidents.list[recentIncidents.list.length - 1];
+        // Reads the incidents table directly (see lastIncidentEnd below),
+        // not a windowed scan of raw checks -- that table is tiny and
+        // indexed by construction (one row per real incident, not one per
+        // check), so there's no cost trade-off in showing the *true* most
+        // recent incident here instead of only ones within an arbitrary
+        // window. See docs/incidents/2026-09-06-d1-quota-exhaustion.md.
+        const lastDown = await lastIncidentEnd(db, t.id);
         return {
             id: t.id,
             name: t.name,
@@ -82,7 +96,7 @@ export async function statusRows(db) {
             checked_at: last ? last.checked_at : null,
             uptime_24h: uptime24h.pct,
             uptime_7d: uptime7d.pct,
-            last_down: lastIncident ? lastIncident.end : null,
+            last_down: lastDown,
         };
     }));
 }
@@ -114,15 +128,26 @@ export async function updateTarget(db, id, { name, host, port, type, tags, notes
 }
 
 export async function deleteTarget(db, id) {
-    await db.prepare("DELETE FROM checks WHERE target_id = ?").bind(id).run();
-    await db.prepare("DELETE FROM targets WHERE id = ?").bind(id).run();
+    await db.batch([
+        db.prepare("DELETE FROM checks WHERE target_id = ?").bind(id),
+        db.prepare("DELETE FROM daily_stats WHERE target_id = ?").bind(id),
+        db.prepare("DELETE FROM incidents WHERE target_id = ?").bind(id),
+        db.prepare("DELETE FROM targets WHERE id = ?").bind(id),
+    ]);
 }
 
 // Wipes check history for one target (uptime %, incidents, latency stats
-// are all computed live from `checks`, so this alone is a full "start
-// fresh") without touching the target's own config/tags/notes.
+// are all computed from `checks`/`daily_stats`/`incidents`, so this alone
+// is a full "start fresh") without touching the target's own
+// config/tags/notes. Must clear all three tables together -- leaving
+// daily_stats or incidents behind after wiping checks would show stale
+// aggregated stats that raw history no longer backs up.
 export async function resetTarget(db, id) {
-    await db.prepare("DELETE FROM checks WHERE target_id = ?").bind(id).run();
+    await db.batch([
+        db.prepare("DELETE FROM checks WHERE target_id = ?").bind(id),
+        db.prepare("DELETE FROM daily_stats WHERE target_id = ?").bind(id),
+        db.prepare("DELETE FROM incidents WHERE target_id = ?").bind(id),
+    ]);
 }
 
 export async function setPaused(db, id, paused) {
@@ -135,10 +160,54 @@ export async function setPinned(db, id, pinned) {
     return getTarget(db, id);
 }
 
-export async function insertCheck(db, target, isUp, latencyMs, reason) {
+// checkedAt is passed in (rather than computed here with Date.now()) so
+// runChecks() can use the exact same timestamp for the checks row, the
+// daily_stats bucket, and -- when this check confirms an incident starting
+// or ending -- the incidents row, instead of three slightly different
+// Date.now() calls racing each other.
+export async function insertCheck(db, target, isUp, latencyMs, reason, checkedAt) {
+    const day = Math.floor(checkedAt / DAY) * DAY;
+    const upCount = isUp ? 1 : 0;
+    const downCount = isUp ? 0 : 1;
+    const latencySum = latencyMs ?? 0;
+    const latencyCount = latencyMs != null ? 1 : 0;
+    // Batched (one D1 round trip, atomic) rather than two separate awaits --
+    // the checks row and its daily_stats bucket should never end up
+    // inconsistent with each other.
+    await db.batch([
+        db.prepare(
+            "INSERT INTO checks (target, target_id, host, port, is_up, latency_ms, fail_reason, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        ).bind(target.name, target.id, target.host, target.port, isUp ? 1 : 0, latencyMs, isUp ? null : (reason || null), checkedAt),
+        db.prepare(
+            `INSERT INTO daily_stats (target_id, day, up_count, down_count, latency_sum, latency_count, latency_min, latency_max)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(target_id, day) DO UPDATE SET
+                up_count = up_count + excluded.up_count,
+                down_count = down_count + excluded.down_count,
+                latency_sum = latency_sum + excluded.latency_sum,
+                latency_count = latency_count + excluded.latency_count,
+                latency_min = MIN(COALESCE(latency_min, excluded.latency_min), COALESCE(excluded.latency_min, latency_min)),
+                latency_max = MAX(COALESCE(latency_max, excluded.latency_max), COALESCE(excluded.latency_max, latency_max))`
+        ).bind(target.id, day, upCount, downCount, latencySum, latencyCount, latencyMs, latencyMs),
+    ]);
+}
+
+// Opens a new incident row -- called once, at the exact moment runChecks()
+// confirms a down transition (the 2nd consecutive failed check), not
+// reconstructed later by replaying raw checks.
+export async function openIncident(db, targetId, startAt, reason) {
     await db.prepare(
-        "INSERT INTO checks (target, target_id, host, port, is_up, latency_ms, fail_reason, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-    ).bind(target.name, target.id, target.host, target.port, isUp ? 1 : 0, latencyMs, isUp ? null : (reason || null), Date.now()).run();
+        "INSERT INTO incidents (target_id, start_at, end_at, reason) VALUES (?, ?, NULL, ?)"
+    ).bind(targetId, startAt, reason || null).run();
+}
+
+// Closes this target's open incident (if any) -- called once, at the exact
+// moment runChecks() confirms recovery. `end_at IS NULL` is what
+// idx_incidents_open exists for.
+export async function closeIncident(db, targetId, endAt) {
+    await db.prepare(
+        "UPDATE incidents SET end_at = ? WHERE target_id = ? AND end_at IS NULL"
+    ).bind(endAt, targetId).run();
 }
 
 // Deletes checks older than `beforeMs`, in batches -- a single unbounded
@@ -180,6 +249,9 @@ export function confirmedIsUp(rows) {
     return !(rows[1] && rows[1].is_up === 0);
 }
 
+// Raw, exact -- reads `checks` directly. Only ever called with a DAY (or
+// shorter) window, where that's cheap (~1,200 rows/target) and precision
+// actually matters (this is "right now", not a period stat).
 export async function uptimeStats(db, targetId, sinceMs) {
     const row = await db.prepare(
         `SELECT SUM(is_up) * 100.0 / COUNT(*) AS pct, COUNT(*) AS samples
@@ -188,11 +260,67 @@ export async function uptimeStats(db, targetId, sinceMs) {
     return { pct: row?.pct ?? null, samples: row?.samples ?? 0 };
 }
 
+// Rollup-backed equivalent of uptimeStats(), for windows (WEEK/MONTH/YEAR)
+// where scanning raw checks would cost thousands to hundreds of thousands
+// of rows. Sums daily_stats for every *complete* day in range, plus a raw
+// scan of just today's (partial, still-accumulating) checks so the result
+// stays accurate up to the last few minutes. This rounds the window's start
+// down to a whole day (so "last 7 days" might actually cover a few hours
+// more than exactly 168h) -- inconsequential for a percentage stat, and a
+// deliberate trade for turning an O(days-in-window x checks/day) scan into
+// O(days-in-window) rollup rows + O(checks today). See
+// docs/incidents/2026-09-06-d1-quota-exhaustion.md.
+export async function uptimeStatsFast(db, targetId, sinceMs) {
+    const dayStart = Math.floor(sinceMs / DAY) * DAY;
+    const todayStart = Math.floor(Date.now() / DAY) * DAY;
+    const [rollup, today] = await Promise.all([
+        db.prepare(
+            `SELECT SUM(up_count) AS up, SUM(up_count + down_count) AS total
+             FROM daily_stats WHERE target_id = ? AND day >= ? AND day < ?`
+        ).bind(targetId, dayStart, todayStart).first(),
+        db.prepare(
+            `SELECT SUM(is_up) AS up, COUNT(*) AS total
+             FROM checks WHERE target_id = ? AND checked_at >= ?`
+        ).bind(targetId, todayStart).first(),
+    ]);
+    const up = (rollup?.up || 0) + (today?.up || 0);
+    const total = (rollup?.total || 0) + (today?.total || 0);
+    return { pct: total ? (up * 100.0 / total) : null, samples: total };
+}
+
+// Raw, exact -- same reasoning as uptimeStats() above: only used for the
+// DAY window, where it's already cheap.
 export async function latencyStats(db, targetId, sinceMs) {
     return db.prepare(
         `SELECT AVG(latency_ms) AS avg, MIN(latency_ms) AS min, MAX(latency_ms) AS max
          FROM checks WHERE target_id = ? AND checked_at > ? AND latency_ms IS NOT NULL`
     ).bind(targetId, sinceMs).first();
+}
+
+// Rollup-backed equivalent of latencyStats() -- same day-rounding trade-off
+// as uptimeStatsFast() above.
+export async function latencyStatsFast(db, targetId, sinceMs) {
+    const dayStart = Math.floor(sinceMs / DAY) * DAY;
+    const todayStart = Math.floor(Date.now() / DAY) * DAY;
+    const [rollup, today] = await Promise.all([
+        db.prepare(
+            `SELECT SUM(latency_sum) AS sum, SUM(latency_count) AS count, MIN(latency_min) AS min, MAX(latency_max) AS max
+             FROM daily_stats WHERE target_id = ? AND day >= ? AND day < ?`
+        ).bind(targetId, dayStart, todayStart).first(),
+        db.prepare(
+            `SELECT SUM(latency_ms) AS sum, COUNT(latency_ms) AS count, MIN(latency_ms) AS min, MAX(latency_ms) AS max
+             FROM checks WHERE target_id = ? AND checked_at >= ? AND latency_ms IS NOT NULL`
+        ).bind(targetId, todayStart).first(),
+    ]);
+    const sum = (rollup?.sum || 0) + (today?.sum || 0);
+    const count = (rollup?.count || 0) + (today?.count || 0);
+    const mins = [rollup?.min, today?.min].filter((v) => v != null);
+    const maxs = [rollup?.max, today?.max].filter((v) => v != null);
+    return {
+        avg: count ? (sum / count) : null,
+        min: mins.length ? Math.min(...mins) : null,
+        max: maxs.length ? Math.max(...maxs) : null,
+    };
 }
 
 export async function latencySeries(db, targetId, sinceMs, limit = 100) {
@@ -204,67 +332,53 @@ export async function latencySeries(db, targetId, sinceMs, limit = 100) {
     return results.reverse();
 }
 
-// Groups consecutive is_up=0 rows (in chronological order) into incidents.
-// A lone failed check is treated as noise, same as confirmedIsUp() above --
-// an incident is only confirmed once a second consecutive failure follows,
-// at which point its "start" is backdated to that first failed check (it
-// really was down from then, the second check just confirmed it wasn't a
-// blip). An incident's "end" is the timestamp it was next confirmed back up
-// (or "now" if still ongoing) -- using the last down check's own timestamp
-// would understate an incident's duration by up to one check interval. Each
-// incident's "reason" is the fail_reason of the check that started it --
-// what triggered the outage, not every reason seen during it if it changed.
-export async function incidents(db, targetId, sinceMs) {
+// Incidents overlapping the window since sinceMs, for one target -- reads
+// the incidents table directly instead of reconstructing from raw checks.
+// That table has one row per actual incident (rare) rather than one per
+// check (constant), so this is cheap and exact regardless of window length
+// or how long the app has been running. An incident that started before
+// the window but is still open (or ended after it) still counts as
+// "overlapping" -- unlike the old raw-scan version, this shows its *true*
+// start time rather than clamping it to the window boundary.
+export async function recentIncidents(db, targetId, sinceMs) {
     const { results } = await db.prepare(
-        `SELECT is_up, checked_at, fail_reason FROM checks
-         WHERE target_id = ? AND checked_at > ? ORDER BY checked_at ASC`
+        `SELECT start_at, end_at, reason FROM incidents
+         WHERE target_id = ? AND (end_at IS NULL OR end_at > ?)
+         ORDER BY start_at ASC`
     ).bind(targetId, sinceMs).all();
-    return groupIncidents(results);
+    const now = Date.now();
+    const list = results.map((r) => ({
+        start: r.start_at,
+        end: r.end_at ?? now,
+        reason: r.reason,
+        ongoing: r.end_at == null,
+    }));
+    const totalDownMs = list.reduce((sum, i) => sum + (i.end - i.start), 0);
+    return { list, count: list.length, totalDownMs };
 }
 
-// Raw checks for a target since sinceMs, for callers that need incidents()
-// over several overlapping windows (see buildDetailData) -- fetch once for
-// the widest window, then group each narrower window's slice in memory
-// instead of re-querying the DB per window.
-export async function rawChecksSince(db, targetId, sinceMs) {
-    const { results } = await db.prepare(
-        `SELECT is_up, checked_at, fail_reason FROM checks
-         WHERE target_id = ? AND checked_at > ? ORDER BY checked_at ASC`
-    ).bind(targetId, sinceMs).all();
-    return results;
-}
-
-export function incidentsFromRows(rows, sinceMs) {
-    return groupIncidents(rows.filter((r) => r.checked_at > sinceMs));
+// The end time of this target's single most recent incident (open or
+// closed), for the status list's "last down X ago" badge -- no window
+// needed at all now that this is an indexed lookup against a table with one
+// row per incident rather than a scan of raw checks.
+export async function lastIncidentEnd(db, targetId) {
+    const row = await db.prepare(
+        `SELECT end_at FROM incidents WHERE target_id = ? ORDER BY start_at DESC LIMIT 1`
+    ).bind(targetId).first();
+    if (!row) return null;
+    return row.end_at ?? Date.now();
 }
 
 // All incidents across every target, newest-first, for the global Incidents
-// page. Reuses the per-target grouping above rather than a single complex
-// SQL query -- fine at the scale this tool actually runs at.
-//
-// Bounded to the last month. This originally used `sinceMs = 0`, re-scanning
-// every check ever recorded, per target, on every page view -- fine when the
-// checks table was small, but it grew into a multi-million-row full-history
-// scan on each hit of this public, unauthenticated page and was the single
-// biggest driver of D1's account-wide daily row-read quota getting blown
-// through on 2026-09-06. A first fix bounded this to YEAR instead, but that
-// was a no-op the moment it shipped: `checks` was only ~2 months old, so
-// "the last year" and "the entire table" were the same query. Since the
-// table is never pruned, that would only have become a real bound once the
-// app had been running for over a year -- and by then it'd bound to ~4M+
-// rows anyway. Bounding by *time* only pays off once the window is smaller
-// than the table's actual age; MONTH actually is, today and for the
-// foreseeable future. See docs/incidents/2026-09-06-d1-quota-exhaustion.md.
+// page. A single indexed query now (previously a per-target loop, each
+// re-scanning raw checks -- see git history / the incident doc for that
+// version and why it kept exhausting the D1 quota).
 export async function allIncidents(db, limit = 200) {
-    const targets = await listTargets(db);
-    const sinceMs = Date.now() - MONTH;
-    const out = [];
-    for (const t of targets) {
-        const { list } = await incidents(db, t.id, sinceMs);
-        for (const inc of list) {
-            out.push({ targetId: t.id, targetName: t.name, start: inc.start, end: inc.end, ongoing: !!inc.ongoing, reason: inc.reason });
-        }
-    }
-    out.sort((a, b) => b.start - a.start);
-    return out.slice(0, limit);
+    const { results } = await db.prepare(
+        `SELECT i.target_id AS targetId, t.name AS targetName, i.start_at AS start, i.end_at AS end, i.reason AS reason
+         FROM incidents i JOIN targets t ON t.id = i.target_id
+         ORDER BY i.start_at DESC LIMIT ?`
+    ).bind(limit).all();
+    const now = Date.now();
+    return results.map((r) => ({ ...r, ongoing: r.end == null, end: r.end ?? now }));
 }
