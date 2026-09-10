@@ -409,8 +409,57 @@ write cap around 35 targets checked every minute) and re-examining the
 read side for exactly this kind of per-view redundancy, rather than just
 asserting the app was scale-proof.
 
+## Round 8 — the write-quota monitor fired for real, and a wrong tool led to a wrong answer first (2026-09-10)
+
+The Round 6 usage monitor sent its first real alert: 71% of the account's
+100K/day write cap used by 13:31 UTC. Investigating it surfaced a
+methodology mistake worth recording, not just the underlying cause.
+
+**The mistake:** asked "what's driving the write count high" the prior
+day, and answered it using `wrangler d1 insights --time-period=1d`,
+assuming that meant "today, since midnight UTC." It doesn't -- it's a
+*rolling* 24-hour window. Extrapolating a partial calendar day's total as
+if the tool's number were also partial (dividing by hours-elapsed,
+multiplying by 24) roughly doubled an already-complete number, producing
+confidently wrong numbers to the user. Caught by cross-checking against
+the authoritative source (the same GraphQL `d1AnalyticsAdaptiveGroups`
+query `usage-monitor.js` itself uses, filtered by calendar `date`, which
+*is* aligned with the quota's actual UTC-midnight reset) and against
+`COUNT(*)` ground truth queried directly from `checks` for the real
+calendar day. Lesson: `wrangler d1 insights`'s time windows are rolling,
+not calendar-aligned, and don't match what the quota itself resets against
+-- useful for relative/exploratory comparisons, not for answering "how
+much of today's quota is used."
+
+**The actual cause, confirmed against ground truth:** 3,256 checks
+recorded so far that calendar day (indexed `COUNT(*)` query, unambiguous)
+-- entirely normal, matching the 4 currently-active targets at a ~1/minute
+cadence. That's only ~19,500 of the expected write cost. The other ~50,000
+was `pruneOldChecks()`'s nightly run hitting its 50,000-row cap -- expected
+and by design, but a reminder that the Round 5 retention cut (400 days ->
+7) left a real backlog (`checks`' oldest row was still 2026-07-14, 58 days
+old) that takes multiple nights of capped deletion to clear, and each of
+those nights runs close to the daily write cap until it does.
+
+**Decision:** rather than let the backlog clear passively over the
+original ~11-night estimate, or delete it all in one shot (worked out to
+roughly 5x a single day's entire write budget, checked before proposing it
+-- see the ground-truth count above), raised `pruneOldChecks()`'s nightly
+cap from 50,000 to 65,000 (`src/db.js`). At ~35,000/day measured organic
+writes, that totals exactly the 100K/day cap -- deliberately tight, not
+comfortable margin, traded for finishing in ~8 nights instead of ~11, with
+the Round 6 monitor as the safety net if organic writes run higher than
+measured on any given day. Should be lowered back toward 50,000 (or
+lower) once `checks`' oldest row is within the 7-day retention window
+again -- at that point there's no more backlog to clear and 65,000/night
+of headroom is just unnecessary risk for no benefit.
+
 ## Follow-ups still open
 
+- **`pruneOldChecks()`'s 65,000/night cap (Round 8) should be lowered back
+  down once the backlog clears** -- check `SELECT MIN(checked_at) FROM
+  checks` periodically; once it's within ~7 days of now, the elevated cap
+  is no longer buying anything and is just unnecessary daily risk.
 - **Shared account-wide quota.** 5M rows/day is shared across all 10 D1
   databases on this account. A future project with the same class of bug
   would break every other project again, `status` included -- mitigated

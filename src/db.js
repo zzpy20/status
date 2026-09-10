@@ -241,7 +241,18 @@ export async function closeIncident(db, targetId, endAt) {
 // that (leaving headroom for the day's normal check inserts), a large
 // backlog just works itself down gradually across however many days it
 // takes instead of all at once.
-export async function pruneOldChecks(db, beforeMs, batchSize = 5000, maxTotal = 50000) {
+//
+// 65,000 (raised from the original 50,000 on 2026-09-10, at ~545K rows
+// still needing to clear down to the 7-day steady state): measured organic
+// writes -- checks + daily_stats from normal operation, no pruning -- at
+// ~35,000/day with today's active target count. 65,000 + 35,000 = 100,000,
+// which is the actual daily cap, not comfortable margin below it -- a
+// deliberate, explicit trade of tighter margin for finishing the backlog
+// in ~8 days instead of ~11, made with the account's 70%-threshold usage
+// monitor (src/usage-monitor.js) as the safety net if organic writes run
+// higher than expected on any given day. Should be lowered back down once
+// the backlog is cleared (see docs/incidents/2026-09-06-d1-quota-exhaustion.md).
+export async function pruneOldChecks(db, beforeMs, batchSize = 5000, maxTotal = 65000) {
     let totalDeleted = 0;
     while (totalDeleted < maxTotal) {
         const limit = Math.min(batchSize, maxTotal - totalDeleted);
