@@ -454,12 +454,19 @@ lower) once `checks`' oldest row is within the 7-day retention window
 again -- at that point there's no more backlog to clear and 65,000/night
 of headroom is just unnecessary risk for no benefit.
 
+## Round 9 — backlog cleared, prune cap lowered back (2026-09-23)
+
+Checked `SELECT MIN(checked_at) FROM checks` periodically as planned in
+Round 8's follow-up. By 2026-09-23 the oldest row was back within the 7-day
+retention window (~7d 3h old), and the Round 6 usage monitor had gone
+alert-free for 3 straight days (last alert 2026-09-19) -- both confirming
+the retention backlog fully cleared. Lowered `pruneOldChecks()`'s cap back
+down from 65,000 to 50,000/night (`src/db.js`); ordinary daily overflow at
+current target counts is a few thousand rows/day, so 50,000 is generous
+headroom rather than a tight fit.
+
 ## Follow-ups still open
 
-- **`pruneOldChecks()`'s 65,000/night cap (Round 8) should be lowered back
-  down once the backlog clears** -- check `SELECT MIN(checked_at) FROM
-  checks` periodically; once it's within ~7 days of now, the elevated cap
-  is no longer buying anything and is just unnecessary daily risk.
 - **Shared account-wide quota.** 5M rows/day is shared across all 10 D1
   databases on this account. A future project with the same class of bug
   would break every other project again, `status` included -- mitigated

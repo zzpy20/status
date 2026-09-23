@@ -242,17 +242,15 @@ export async function closeIncident(db, targetId, endAt) {
 // backlog just works itself down gradually across however many days it
 // takes instead of all at once.
 //
-// 65,000 (raised from the original 50,000 on 2026-09-10, at ~545K rows
-// still needing to clear down to the 7-day steady state): measured organic
-// writes -- checks + daily_stats from normal operation, no pruning -- at
-// ~35,000/day with today's active target count. 65,000 + 35,000 = 100,000,
-// which is the actual daily cap, not comfortable margin below it -- a
-// deliberate, explicit trade of tighter margin for finishing the backlog
-// in ~8 days instead of ~11, made with the account's 70%-threshold usage
-// monitor (src/usage-monitor.js) as the safety net if organic writes run
-// higher than expected on any given day. Should be lowered back down once
-// the backlog is cleared (see docs/incidents/2026-09-06-d1-quota-exhaustion.md).
-export async function pruneOldChecks(db, beforeMs, batchSize = 5000, maxTotal = 65000) {
+// Was temporarily raised 50,000 -> 65,000 on 2026-09-10 to clear a one-off
+// ~545K-row retention backlog (see docs/incidents/2026-09-06-d1-quota-exhaustion.md,
+// Round 8) faster. Confirmed cleared on 2026-09-23 (oldest `checks` row back
+// within the 7-day window, usage monitor alert-free for 3+ days) and lowered
+// back to 50,000. Ordinary daily overflow at steady state is tiny -- a
+// handful of thousand rows/day at current target counts -- so 50,000 is
+// generous headroom, not a tight fit; no reason to run it hotter than that
+// without a concrete reason (another retention cut, many more targets, etc).
+export async function pruneOldChecks(db, beforeMs, batchSize = 5000, maxTotal = 50000) {
     let totalDeleted = 0;
     while (totalDeleted < maxTotal) {
         const limit = Math.min(batchSize, maxTotal - totalDeleted);
