@@ -465,6 +465,38 @@ down from 65,000 to 50,000/night (`src/db.js`); ordinary daily overflow at
 current target counts is a few thousand rows/day, so 50,000 is generous
 headroom rather than a tight fit.
 
+## Round 10 — the ~2 rows/check estimate was wrong, by about 3x (2026-10-07)
+
+The Round 6 monitor fired again -- 70% of the write cap used by 08:42 UTC,
+with `status-uptime` as the top database. Investigated expecting a repeat
+of Round 8 (prune backlog); it wasn't. `SELECT MIN(checked_at)` showed the
+oldest row at 7.2 days -- right at the 7-day retention target, not a
+58-day backlog -- so the nightly prune wasn't the driver this time.
+
+Checked `wrangler d1 insights status-uptime --time-period=1d --sort-by=writes`
+instead. The dominant query was `INSERT INTO checks`: 11,547 calls,
+**averaging 5 rows written per call**, not 1. `checks` carries three
+secondary indexes (`idx_checks_target_time`, `idx_checks_target_id_time`,
+`idx_checks_checked_at`) and uses `AUTOINCREMENT`, which maintains its own
+`sqlite_sequence` row on every insert -- D1 bills index and sequence
+maintenance as rows written, so one logical insert costs 1 (table) + 3
+(indexes) + 1 (autoincrement sequence) = 5. Add the `daily_stats` upsert
+(1 more write/check) and the true cost is **~6 rows written per check**,
+not the ~2/check assumed when the "35 targets" ceiling below was
+calculated -- that estimate undercounted by roughly 3x because it counted
+logical row writes, not billed rows written.
+
+At the real ~6 rows/check, 9 targets at 1-check/minute already costs
+~77,760 writes/day in ordinary operation alone (no backlog, no bug) --
+enough on its own to explain crossing 70% most days. The actual ceiling
+at this cadence is closer to **11-12 targets**, not 35.
+
+Not treated as a defect to fix -- same reasoning as the original "35
+targets" entry, just a corrected number. No code changed; this was purely
+a documentation correction after the arithmetic was checked against
+`wrangler d1 insights` ground truth instead of re-trusted from Round 7's
+original (uninvestigated) estimate.
+
 ## Follow-ups still open
 
 - **Shared account-wide quota.** 5M rows/day is shared across all 10 D1
@@ -479,13 +511,17 @@ headroom rather than a tight fit.
   cost that's trivial next to the time this chain of incidents has taken
   to fix properly. Worth revisiting.
 - **Write volume scales linearly with target count and check frequency,
-  unaddressed.** At the current 1-check-per-minute cadence, each target
-  writes ~2 rows/check (`checks` + `daily_stats`) -- ~23,000 writes/day
-  account-wide at 8 targets (23% of the 100K/day free-tier write cap), but
-  that crosses the cap entirely around **35 targets** checked every
-  minute, with no other change. Unlike everything fixed in rounds 1-7,
-  this isn't a bug -- it's a real, linear resource cost of the check
-  frequency and target count you actually choose. Only relevant if
-  `status` grows well past its current 8 targets; not touched, since it
-  isn't a defect to fix, just a ceiling to know about (checking less
-  often, e.g. every 5 minutes, raises it roughly 5x).
+  and the real ceiling is lower than once thought.** At the current
+  1-check-per-minute cadence, each target costs ~6 rows written/check
+  (`checks`' 3 indexes + its `AUTOINCREMENT` sequence row, plus the
+  `daily_stats` upsert -- see Round 10) -- the cap (100K/day, free tier)
+  is reached around **11-12 targets** checked every minute, not the ~35
+  a Round 7 estimate (which counted logical rows, not billed rows
+  written) suggested. Unlike everything fixed in rounds 1-7, this isn't a
+  bug -- it's a real resource cost of the check frequency, target count,
+  and index count you actually choose. At 9 targets today this is already
+  close enough to explain the Round 10 alert without any backlog or
+  defect. Options if it needs headroom: drop a redundant index (one of
+  the two `checks` indexes keyed by `target`/`target_id` likely
+  overlaps), check less often (every 5 minutes cuts the per-target cost
+  ~5x), or move to the paid tier above.
