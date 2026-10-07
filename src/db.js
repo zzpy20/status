@@ -221,19 +221,28 @@ export async function closeIncident(db, targetId, endAt) {
     ]);
 }
 
-// Deletes checks older than `beforeMs`, in batches -- a single unbounded
-// DELETE over however many hundred thousand rows have aged out since the
-// last run would itself be a spike in rows written/read, the same failure
-// shape as the incident this exists to prevent. `checked_at < ?` doesn't
-// match idx_checks_target_id_time's leading column (target_id), so this
-// relies on idx_checks_checked_at (migration 0007) to stay an index range
-// scan instead of a full table scan. Called once a day -- see
-// scheduled() in index.js -- not on every check.
-// maxTotal caps how much a single invocation will ever delete. Ordinary
-// daily overflow (a day's worth of checks aging past the retention window)
-// is tiny -- this cap exists for the case where the retention window
-// itself just got shrunk a lot (as it did, 400 days -> 7, once daily_stats/
-// incidents/state_since stopped needing raw history to back them -- see
+// Deletes checks older than `beforeMs`, batched per target -- a single
+// unbounded DELETE over however many hundred thousand rows have aged out
+// since the last run would itself be a spike in rows written/read, the
+// same failure shape as the incident this exists to prevent. Called once a
+// day -- see scheduled() in index.js -- not on every check.
+//
+// Loops over `targetIds` and deletes `target_id = ? AND checked_at < ?` per
+// target, rather than a single global `checked_at < ?` scan, so it can use
+// idx_checks_target_id_time (already required for every read query -- see
+// uptimeStats()/recentChecks() etc. above) instead of needing its own
+// checked_at-only index. That index (idx_checks_checked_at, migration 0007)
+// was dropped in migration 0012 once this was the only caller that needed
+// it -- one fewer index for D1 to bill as a write on every check insert.
+// See docs/incidents/2026-09-06-d1-quota-exhaustion.md, Round 12.
+//
+// maxTotal caps how much a single invocation will ever delete, across all
+// targets combined -- not guaranteed to reach every target in one run if
+// the cap is hit partway through, but nothing is skipped: the next day's
+// run recomputes `beforeMs` fresh and picks up wherever this one stopped.
+// This cap exists for the case where the retention window itself just got
+// shrunk a lot (as it did, 400 days -> 7, once daily_stats/incidents/
+// state_since stopped needing raw history to back them -- see
 // docs/incidents/2026-09-06-d1-quota-exhaustion.md), leaving a large
 // backlog. D1's free tier caps rows *written* at 100K/day same as it caps
 // rows read at 5M/day; deleting hundreds of thousands of backlogged rows in
@@ -250,15 +259,18 @@ export async function closeIncident(db, targetId, endAt) {
 // handful of thousand rows/day at current target counts -- so 50,000 is
 // generous headroom, not a tight fit; no reason to run it hotter than that
 // without a concrete reason (another retention cut, many more targets, etc).
-export async function pruneOldChecks(db, beforeMs, batchSize = 5000, maxTotal = 50000) {
+export async function pruneOldChecks(db, beforeMs, targetIds, batchSize = 5000, maxTotal = 50000) {
     let totalDeleted = 0;
-    while (totalDeleted < maxTotal) {
-        const limit = Math.min(batchSize, maxTotal - totalDeleted);
-        const { meta } = await db.prepare(
-            "DELETE FROM checks WHERE id IN (SELECT id FROM checks WHERE checked_at < ? LIMIT ?)"
-        ).bind(beforeMs, limit).run();
-        totalDeleted += meta.changes;
-        if (meta.changes < limit) break; // fewer matching rows than asked for -- fully caught up
+    for (const targetId of targetIds) {
+        if (totalDeleted >= maxTotal) break;
+        while (totalDeleted < maxTotal) {
+            const limit = Math.min(batchSize, maxTotal - totalDeleted);
+            const { meta } = await db.prepare(
+                "DELETE FROM checks WHERE id IN (SELECT id FROM checks WHERE target_id = ? AND checked_at < ? LIMIT ?)"
+            ).bind(targetId, beforeMs, limit).run();
+            totalDeleted += meta.changes;
+            if (meta.changes < limit) break; // this target's fully caught up
+        }
     }
     return totalDeleted;
 }

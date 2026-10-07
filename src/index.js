@@ -197,7 +197,9 @@ export default {
         const tick = new Date(event.scheduledTime);
         if (tick.getUTCHours() === 3 && tick.getUTCMinutes() === 0) {
             ctx.waitUntil(
-                db.pruneOldChecks(env.DB, event.scheduledTime - CHECKS_RETENTION_MS).then((deleted) => {
+                db.listTargets(env.DB).then((targets) =>
+                    db.pruneOldChecks(env.DB, event.scheduledTime - CHECKS_RETENTION_MS, targets.map((t) => t.id))
+                ).then((deleted) => {
                     if (deleted) console.log(`pruned ${deleted} checks older than ${CHECKS_RETENTION_MS / DAY} days`);
                 })
             );
