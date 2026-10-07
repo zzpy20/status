@@ -497,6 +497,30 @@ a documentation correction after the arithmetic was checked against
 `wrangler d1 insights` ground truth instead of re-trusted from Round 7's
 original (uninvestigated) estimate.
 
+## Round 11 — dropped the redundant index (2026-10-07)
+
+Acted on Round 10's first option. `checks` carried two indexes that looked
+like duplicates: `idx_checks_target_time` (`target`, `checked_at`) and
+`idx_checks_target_id_time` (`target_id`, `checked_at`). Grepped every
+query against `checks` in `src/db.js` -- all of them filter by `target_id`
+(the integer FK backfilled in migration 0002); none filter by the legacy
+`target` TEXT column. `idx_checks_target_time` had been pure dead weight
+since that backfill, costing one extra billed row-write per check insert
+for zero read benefit.
+
+**Fix:** `migrations/0011_drop_redundant_check_index.sql` --
+`DROP INDEX IF EXISTS idx_checks_target_time`. Applied to the remote DB;
+confirmed via `sqlite_master` that only `idx_checks_target_id_time` and
+`idx_checks_checked_at` remain on `checks`. Verified `/`, `/incidents`, and
+`/monitor/1` all still return 200 after the drop.
+
+**Effect:** billed cost per check insert drops from 5 rows (1 table + 3
+indexes + 1 `AUTOINCREMENT` sequence row) to 4, so total cost per check
+(including the `daily_stats` upsert) goes from ~6 rows written to **~5**.
+New ceiling at 1-check/minute: `100,000 / (1,440 x 5)` ≈ **13-14 targets**,
+up from the ~11-12 in Round 10. At 9 targets today, that's back to a few
+targets of real headroom instead of being right at the edge.
+
 ## Follow-ups still open
 
 - **Shared account-wide quota.** 5M rows/day is shared across all 10 D1
@@ -512,16 +536,15 @@ original (uninvestigated) estimate.
   to fix properly. Worth revisiting.
 - **Write volume scales linearly with target count and check frequency,
   and the real ceiling is lower than once thought.** At the current
-  1-check-per-minute cadence, each target costs ~6 rows written/check
-  (`checks`' 3 indexes + its `AUTOINCREMENT` sequence row, plus the
-  `daily_stats` upsert -- see Round 10) -- the cap (100K/day, free tier)
-  is reached around **11-12 targets** checked every minute, not the ~35
-  a Round 7 estimate (which counted logical rows, not billed rows
-  written) suggested. Unlike everything fixed in rounds 1-7, this isn't a
+  1-check-per-minute cadence, each target costs ~5 rows written/check
+  (`checks`' remaining 2 indexes + its `AUTOINCREMENT` sequence row, plus
+  the `daily_stats` upsert -- see Rounds 10-11) -- the cap (100K/day, free
+  tier) is reached around **13-14 targets** checked every minute, not the
+  ~35 a Round 7 estimate (which counted logical rows, not billed rows
+  written) suggested, and up from ~11-12 before Round 11 dropped the
+  redundant index. Unlike everything fixed in rounds 1-7, this isn't a
   bug -- it's a real resource cost of the check frequency, target count,
-  and index count you actually choose. At 9 targets today this is already
-  close enough to explain the Round 10 alert without any backlog or
-  defect. Options if it needs headroom: drop a redundant index (one of
-  the two `checks` indexes keyed by `target`/`target_id` likely
-  overlaps), check less often (every 5 minutes cuts the per-target cost
-  ~5x), or move to the paid tier above.
+  and index count you actually choose. At 9 targets today that leaves a
+  few targets of real headroom. Remaining options if more is needed:
+  check less often (every 5 minutes cuts the per-target cost ~5x), or move
+  to the paid tier above.
