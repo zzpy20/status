@@ -160,7 +160,7 @@ const BASE_STYLE = `
     .form-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
     .form-row .field { flex: 1 1 160px; }
     .form-row .field.port { flex: 0 0 90px; }
-    .actions { display: flex; gap: 4px; flex-shrink: 0; }
+    .actions { display: flex; gap: 4px; flex: 0 0 520px; }
     .grow { flex: 1 1 auto; min-width: 0; }
     .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
