@@ -521,6 +521,42 @@ New ceiling at 1-check/minute: `100,000 / (1,440 x 5)` ≈ **13-14 targets**,
 up from the ~11-12 in Round 10. At 9 targets today, that's back to a few
 targets of real headroom instead of being right at the edge.
 
+## Round 12 — restructured pruneOldChecks() to drop the last avoidable index (2026-10-07)
+
+Reviewed the schema for further write-cost reductions beyond Round 11.
+`idx_checks_checked_at` (migration 0007) was the one remaining index not
+required by any read query -- it existed solely so `pruneOldChecks()`
+could delete by `checked_at < ?` with no `target_id` filter without
+falling back to a full table scan. Every read query already filters by
+`target_id` first (confirmed by grep), so restructuring the prune to loop
+per target and delete `target_id = ? AND checked_at < ?` lets it reuse
+`idx_checks_target_id_time` instead -- no new index needed.
+
+**Fix:** `pruneOldChecks()` (`src/db.js`) now takes a `targetIds` array and
+loops over it, same batched-delete-with-cap logic as before but scoped per
+target; its one caller (`scheduled()` in `src/index.js`) now fetches
+`listTargets()` first and passes the ids through.
+`migrations/0012_drop_global_checked_at_index.sql` drops
+`idx_checks_checked_at`. Rejected dropping `checks.id`'s `AUTOINCREMENT`
+instead (the other candidate for a free row/check) -- SQLite can't alter
+that in place, only via a full table rebuild, and re-inserting the
+~94K-100K rows that exist today would itself cost on the order of
+~280K writes in one shot, several times a single day's write budget. Not
+worth 1 row/check of ongoing savings for that one-time risk.
+
+**Verified, not assumed:** deployed the code first (`wrangler deploy`,
+confirmed `/`, `/incidents`, `/monitor/1` all still return 200, and that
+new checks kept landing on the normal ~1/minute cadence), then applied the
+migration to the remote DB and confirmed via `sqlite_master` that `checks`
+now carries only `idx_checks_target_id_time` -- re-checked all three
+routes again afterward.
+
+**Effect:** per-check write cost drops from 5 rows to 4 (1 table + 1
+remaining index + 1 `AUTOINCREMENT` sequence row + 1 `daily_stats`
+upsert). New ceiling at 1-check/minute: `100,000 / (1,440 x 4)` ≈ **17
+targets**, up from ~13-14 after Round 11. At a 5-minute interval instead,
+the same 4 rows/check works out to `100,000 / (288 x 4)` ≈ **87 targets**.
+
 ## Follow-ups still open
 
 - **Shared account-wide quota.** 5M rows/day is shared across all 10 D1
@@ -536,15 +572,19 @@ targets of real headroom instead of being right at the edge.
   to fix properly. Worth revisiting.
 - **Write volume scales linearly with target count and check frequency,
   and the real ceiling is lower than once thought.** At the current
-  1-check-per-minute cadence, each target costs ~5 rows written/check
-  (`checks`' remaining 2 indexes + its `AUTOINCREMENT` sequence row, plus
-  the `daily_stats` upsert -- see Rounds 10-11) -- the cap (100K/day, free
-  tier) is reached around **13-14 targets** checked every minute, not the
+  1-check-per-minute cadence, each target costs ~4 rows written/check
+  (`checks`' one remaining index + its `AUTOINCREMENT` sequence row, plus
+  the `daily_stats` upsert -- see Rounds 10-12) -- the cap (100K/day, free
+  tier) is reached around **17 targets** checked every minute, not the
   ~35 a Round 7 estimate (which counted logical rows, not billed rows
-  written) suggested, and up from ~11-12 before Round 11 dropped the
-  redundant index. Unlike everything fixed in rounds 1-7, this isn't a
-  bug -- it's a real resource cost of the check frequency, target count,
-  and index count you actually choose. At 9 targets today that leaves a
-  few targets of real headroom. Remaining options if more is needed:
-  check less often (every 5 minutes cuts the per-target cost ~5x), or move
-  to the paid tier above.
+  written) suggested, up from ~11-12 before Round 11 and ~13-14 before
+  Round 12. Unlike everything fixed in rounds 1-7, this isn't a bug --
+  it's a real resource cost of the check frequency, target count, and
+  index count you actually choose. At 9 targets today that's a
+  comfortable margin again. Remaining options if more is ever needed:
+  check less often (every 5 minutes cuts the per-target cost ~5x, to a
+  ~87-target ceiling at the current 4 rows/check), or move to the paid
+  tier above. Dropping `checks.id`'s `AUTOINCREMENT` (the one other
+  avoidable cost) was considered and rejected in Round 12 -- it needs a
+  full table rebuild in SQLite, and rebuilding the table at its current
+  size would itself cost several times a single day's write budget.
