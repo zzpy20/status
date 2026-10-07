@@ -271,6 +271,7 @@ export function renderStatusPage(rows) {
         <div class="Box-row header-row">
             <span style="width:8px"></span>
             <div class="grow">Monitor</div>
+            <div style="min-width:130px">Tags</div>
             <div style="min-width:110px">Status</div>
             <div style="min-width:70px">24h</div>
             <div style="min-width:70px">7d</div>
@@ -283,8 +284,8 @@ export function renderStatusPage(rows) {
                 ${r.pinned ? '<span class="pin-badge">Pinned</span>' : ""}
                 <a href="/monitor/${r.id}"><strong>${r.name}</strong></a>
                 <div class="mono">${targetIdentifier(r)}</div>
-                ${tagPillsHtml(r.tags, "filterByTag")}
             </div>
+            <div style="min-width:130px">${tagPillsHtml(r.tags, "filterByTag")}</div>
             <div style="min-width:110px">${statusHtml(r.paused, r.is_up, r.checked_at)}</div>
             <div style="min-width:70px">${pct(r.uptime_24h)} <span class="mono">24h</span></div>
             <div style="min-width:70px">${pct(r.uptime_7d)} <span class="mono">7d</span></div>
@@ -607,10 +608,10 @@ export function renderAdminPage() {
                     \${t.pinned ? '<span class="pin-badge">Pinned</span>' : ""}
                     <strong>\${t.name}</strong>
                     <div class="mono">\${targetIdentifier(t)}</div>
-                    \${tagPills(t.tags)}
                     \${t.notes ? \`<div class="notes-snippet" onclick="toggleNotes(\${t.id})">\${notesPreview}\${t.notes.length > 100 ? "…" : ""}</div>
                     <div class="notes-full" id="notes-full-\${t.id}" style="display:none">\${renderNotesHtml(t.notes)}</div>\` : ""}
                 </div>
+                <div style="min-width:130px">\${tagPills(t.tags)}</div>
                 <div class="mono" style="min-width:130px">\${stateText}</div>
                 <div class="actions">
                     <button class="link" onclick="openEditModal(\${t.id})">Edit</button>
@@ -640,6 +641,7 @@ export function renderAdminPage() {
             '<input type="checkbox" id="select-all" onchange="toggleSelectAll(this.checked)" />' +
             '<span style="width:8px"></span>' +
             '<div class="grow">Monitor</div>' +
+            '<div style="min-width:130px">Tags</div>' +
             '<div style="min-width:130px">Status</div>' +
             '<div class="actions" style="margin-left:0">Actions</div>' +
             '</div>';
