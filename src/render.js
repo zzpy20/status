@@ -243,6 +243,7 @@ function navRow(active) {
     const items = [
         { key: "status", label: "Status", href: "/" },
         { key: "incidents", label: "Incidents", href: "/incidents" },
+        { key: "archived", label: "Archived", href: "/archived" },
         { key: "admin", label: "Admin", href: "/admin" },
     ];
     return `<nav style="margin-bottom:20px">${items.map((i) =>
@@ -266,7 +267,7 @@ function statusHtml(paused, isUp, checkedAt) {
     return `<span class="status-badge ${isUp ? "up" : "down"}">${isUp ? "Up" : "Down"}</span> &middot; ${timeAgo(checkedAt)}`;
 }
 
-export function renderStatusPage(rows) {
+export function renderStatusPage(rows, { title = "Status", active = "status", emptyText = "No monitors match your search." } = {}) {
     const headerRow = `
         <div class="Box-row header-row">
             <span style="width:8px"></span>
@@ -292,12 +293,12 @@ export function renderStatusPage(rows) {
             <div style="min-width:90px" class="mono">down ${timeAgo(r.last_down)}</div>
         </div>`).join("");
 
-    return pageShell("status", `
-        ${navRow("status")}
-        <h1 class="page-title">Status</h1>
+    return pageShell(title, `
+        ${navRow(active)}
+        <h1 class="page-title">${title}</h1>
         <div class="search-box"><input id="search" placeholder="Search by name, host, or tag..." oninput="filterRows()"><span class="search-clear" id="search-clear" onclick="clearSearch()">&times;</span></div>
         <div class="Box" id="rows-box">${headerRow}${items}</div>
-        <p id="no-results" class="mono" style="display:none">No monitors match your search.</p>
+        <p id="no-results" class="mono" style="display:none">${emptyText}</p>
         <footer>Checked every minute via Cloudflare Workers Cron Triggers + D1</footer>
         <script>
         function clearSearch() {

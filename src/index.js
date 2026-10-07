@@ -221,7 +221,22 @@ export default {
         if (url.pathname === "/") {
             return withEdgeCache(request, ctx, async () => {
                 const rows = stripNotes(await db.statusRows(env.DB));
-                return new Response(renderStatusPage(rows), { headers: HTML_HEADERS });
+                return new Response(renderStatusPage(rows.filter((r) => !r.paused)), { headers: HTML_HEADERS });
+            });
+        }
+
+        // Paused targets, split out of the main Status page so a monitor
+        // you're not actively watching doesn't sit alongside ones you are.
+        // Reuses the exact same statusRows() data and page template as "/",
+        // just filtered the other way; Admin's existing Pause/Resume is
+        // still the only way to move a target between the two -- Resume
+        // alone moves it back onto "/".
+        if (url.pathname === "/archived") {
+            return withEdgeCache(request, ctx, async () => {
+                const rows = stripNotes(await db.statusRows(env.DB));
+                return new Response(renderStatusPage(rows.filter((r) => r.paused), {
+                    title: "Archived", active: "archived", emptyText: "No archived monitors.",
+                }), { headers: HTML_HEADERS });
             });
         }
 
