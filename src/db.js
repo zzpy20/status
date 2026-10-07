@@ -103,8 +103,8 @@ export async function statusRows(db) {
 
 export async function listTargets(db, { includePaused = true } = {}) {
     const sql = includePaused
-        ? "SELECT * FROM targets ORDER BY pinned DESC, id"
-        : "SELECT * FROM targets WHERE paused = 0 ORDER BY pinned DESC, id";
+        ? "SELECT * FROM targets ORDER BY pinned DESC, name"
+        : "SELECT * FROM targets WHERE paused = 0 ORDER BY pinned DESC, name";
     const { results } = await db.prepare(sql).all();
     return results.map(parseTarget);
 }
