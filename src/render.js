@@ -520,6 +520,7 @@ export function renderAdminPage() {
         const TOKEN_KEY = "status_admin_token";
         let targets = [];
         let editingId = null;
+        let modalSnapshot = null;
 
         function getToken() { return localStorage.getItem(TOKEN_KEY) || ""; }
         function saveToken() {
@@ -806,6 +807,10 @@ export function renderAdminPage() {
             loadTargets();
         }
 
+        function snapshotModalFields() {
+            const fields = ["name", "type", "port-host", "port-num", "http-url", "expectedStatus", "keyword", "dns-hostname", "recordType", "expectedValue", "tags", "notes"];
+            return fields.map((f) => { const el = document.getElementById("new-" + f); return el ? el.value : ""; }).join("\\u0001");
+        }
         function clearModalFields() {
             ["name", "port-host", "port-num", "http-url", "expectedStatus", "keyword", "dns-hostname", "expectedValue", "tags", "notes"].forEach((field) => {
                 const el = document.getElementById("new-" + field);
@@ -838,6 +843,7 @@ export function renderAdminPage() {
             document.getElementById("modal-title").textContent = "Add monitor";
             document.getElementById("modal-submit-btn").textContent = "Add monitor";
             document.getElementById("monitor-modal-backdrop").classList.add("open");
+            modalSnapshot = snapshotModalFields();
         }
         function openEditModal(id) {
             const t = targets.find((x) => x.id === id);
@@ -847,10 +853,17 @@ export function renderAdminPage() {
             document.getElementById("modal-title").textContent = "Edit monitor";
             document.getElementById("modal-submit-btn").textContent = "Save changes";
             document.getElementById("monitor-modal-backdrop").classList.add("open");
+            modalSnapshot = snapshotModalFields();
         }
-        function closeModal() {
+        // force=true skips the unsaved-changes check -- used right after a
+        // successful save, where there's nothing left to discard.
+        function closeModal(force) {
+            if (!force && modalSnapshot !== null && snapshotModalFields() !== modalSnapshot) {
+                if (!confirm("Discard unsaved changes?")) return;
+            }
             document.getElementById("monitor-modal-backdrop").classList.remove("open");
             editingId = null;
+            modalSnapshot = null;
         }
         document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
 
@@ -866,7 +879,7 @@ export function renderAdminPage() {
             } else {
                 await api("/admin/api/targets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
             }
-            closeModal();
+            closeModal(true);
             loadTargets();
         }
         if (!getToken()) document.getElementById("auth-box").style.display = "block";
