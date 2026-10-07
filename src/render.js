@@ -273,7 +273,7 @@ export function renderStatusPage(rows, { title = "Status", active = "status", em
             <span style="width:8px"></span>
             <div class="grow">Monitor</div>
             <div style="flex:0 0 170px">Tags</div>
-            <div style="flex:0 0 150px">Status</div>
+            <div style="flex:0 0 120px">Status</div>
             <div style="min-width:70px">24h</div>
             <div style="min-width:70px">7d</div>
             <div style="min-width:90px">Last down</div>
@@ -287,7 +287,7 @@ export function renderStatusPage(rows, { title = "Status", active = "status", em
                 <div class="mono">${targetIdentifier(r)}</div>
             </div>
             <div style="flex:0 0 170px">${tagPillsHtml(r.tags, "filterByTag")}</div>
-            <div style="flex:0 0 150px">${statusHtml(r.paused, r.is_up, r.checked_at)}</div>
+            <div style="flex:0 0 120px">${statusHtml(r.paused, r.is_up, r.checked_at)}</div>
             <div style="min-width:70px">${pct(r.uptime_24h)} <span class="mono">24h</span></div>
             <div style="min-width:70px">${pct(r.uptime_7d)} <span class="mono">7d</span></div>
             <div style="min-width:90px" class="mono">down ${timeAgo(r.last_down)}</div>
@@ -613,7 +613,7 @@ export function renderAdminPage() {
                     <div class="notes-full" id="notes-full-\${t.id}" style="display:none">\${renderNotesHtml(t.notes)}</div>\` : ""}
                 </div>
                 <div style="flex:0 0 170px">\${tagPills(t.tags)}</div>
-                <div class="mono" style="flex:0 0 160px">\${stateText}</div>
+                <div class="mono" style="flex:0 0 120px">\${stateText}</div>
                 <div class="actions">
                     <button class="link" onclick="openEditModal(\${t.id})">Edit</button>
                     <button onclick="togglePin(\${t.id}, \${t.pinned})">\${t.pinned ? 'Unpin' : 'Pin to top'}</button>
@@ -643,7 +643,7 @@ export function renderAdminPage() {
             '<span style="width:8px"></span>' +
             '<div class="grow">Monitor</div>' +
             '<div style="flex:0 0 170px">Tags</div>' +
-            '<div style="flex:0 0 160px">Status</div>' +
+            '<div style="flex:0 0 120px">Status</div>' +
             '<div class="actions">Actions</div>' +
             '</div>';
         function renderTargets() {
