@@ -160,7 +160,7 @@ const BASE_STYLE = `
     .form-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
     .form-row .field { flex: 1 1 160px; }
     .form-row .field.port { flex: 0 0 90px; }
-    .actions { display: flex; gap: 4px; margin-left: auto; flex-shrink: 0; }
+    .actions { display: flex; gap: 4px; flex-shrink: 0; }
     .grow { flex: 1 1 auto; min-width: 0; }
     .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -272,8 +272,8 @@ export function renderStatusPage(rows, { title = "Status", active = "status", em
         <div class="Box-row header-row">
             <span style="width:8px"></span>
             <div class="grow">Monitor</div>
-            <div style="min-width:130px">Tags</div>
-            <div style="min-width:110px">Status</div>
+            <div style="flex:0 0 170px">Tags</div>
+            <div style="flex:0 0 150px">Status</div>
             <div style="min-width:70px">24h</div>
             <div style="min-width:70px">7d</div>
             <div style="min-width:90px">Last down</div>
@@ -286,8 +286,8 @@ export function renderStatusPage(rows, { title = "Status", active = "status", em
                 <a href="/monitor/${r.id}"><strong>${r.name}</strong></a>
                 <div class="mono">${targetIdentifier(r)}</div>
             </div>
-            <div style="min-width:130px">${tagPillsHtml(r.tags, "filterByTag")}</div>
-            <div style="min-width:110px">${statusHtml(r.paused, r.is_up, r.checked_at)}</div>
+            <div style="flex:0 0 170px">${tagPillsHtml(r.tags, "filterByTag")}</div>
+            <div style="flex:0 0 150px">${statusHtml(r.paused, r.is_up, r.checked_at)}</div>
             <div style="min-width:70px">${pct(r.uptime_24h)} <span class="mono">24h</span></div>
             <div style="min-width:70px">${pct(r.uptime_7d)} <span class="mono">7d</span></div>
             <div style="min-width:90px" class="mono">down ${timeAgo(r.last_down)}</div>
@@ -612,8 +612,8 @@ export function renderAdminPage() {
                     \${t.notes ? \`<div class="notes-snippet" onclick="toggleNotes(\${t.id})">\${notesPreview}\${t.notes.length > 100 ? "…" : ""}</div>
                     <div class="notes-full" id="notes-full-\${t.id}" style="display:none">\${renderNotesHtml(t.notes)}</div>\` : ""}
                 </div>
-                <div style="min-width:130px">\${tagPills(t.tags)}</div>
-                <div class="mono" style="min-width:130px">\${stateText}</div>
+                <div style="flex:0 0 170px">\${tagPills(t.tags)}</div>
+                <div class="mono" style="flex:0 0 160px">\${stateText}</div>
                 <div class="actions">
                     <button class="link" onclick="openEditModal(\${t.id})">Edit</button>
                     <button onclick="togglePin(\${t.id}, \${t.pinned})">\${t.pinned ? 'Unpin' : 'Pin to top'}</button>
@@ -642,9 +642,9 @@ export function renderAdminPage() {
             '<input type="checkbox" id="select-all" onchange="toggleSelectAll(this.checked)" />' +
             '<span style="width:8px"></span>' +
             '<div class="grow">Monitor</div>' +
-            '<div style="min-width:130px">Tags</div>' +
-            '<div style="min-width:130px">Status</div>' +
-            '<div class="actions" style="margin-left:0">Actions</div>' +
+            '<div style="flex:0 0 170px">Tags</div>' +
+            '<div style="flex:0 0 160px">Status</div>' +
+            '<div class="actions">Actions</div>' +
             '</div>';
         function renderTargets() {
             const q = (document.getElementById("search")?.value || "").trim().toLowerCase();
