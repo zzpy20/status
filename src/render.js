@@ -171,6 +171,9 @@ const BASE_STYLE = `
     .row-menu button:hover, .row-menu button:focus-visible { background: var(--btn-hover-bg); outline: none; }
     .row-menu button.danger { color: var(--danger-fg); }
     .row-menu-sep { height: 1px; background: var(--border-muted); margin: 4px 0; }
+    .row-menu a { display: block; padding: 6px 10px; border-radius: 4px; color: var(--fg-default); text-decoration: none; white-space: nowrap; }
+    .row-menu a:hover, .row-menu a:focus-visible { background: var(--btn-hover-bg); outline: none; }
+    .row-more { flex-shrink: 0; padding: 2px 8px; line-height: 1.2; }
     .grow { flex: 1 1 auto; min-width: 0; }
     .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -284,6 +287,7 @@ const BASE_STYLE = `
         #rows-box .col-name .note-btn { flex-shrink: 0; }
         #rows-box .col-ident, #rows-box .col-tags, #rows-box .wide-only { display: none; }
         #rows-box .Box-row > .col-status { order: 1; white-space: nowrap; font-size: 13px; }
+        #rows-box .Box-row > .row-more { order: 1; }
         #rows-box .Box-row > .col-stat { order: 3; min-width: 0 !important; font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
         #rows-box .col-status + .col-stat { margin-left: 18px; }
         /* Admin rows on phones: line 1 = checkbox, dot, #id name, Edit/⋯;
@@ -512,11 +516,73 @@ export function renderStatusPage(rows, { title = "Status", active = "status", em
             let token = "";
             try { token = localStorage.getItem("status_admin_token") || ""; } catch (e) {}
             if (!token) return;
+            attachAdminMenus();
             fetch("/admin/api/notes", { headers: { Authorization: "Bearer " + token } })
                 .then((r) => (r.ok ? r.json() : null))
                 .then((notes) => { if (notes) attachNotes(notes); })
                 .catch(() => {});
         })();
+
+        // Admin-only "⋯" at the end of each row (same token check as the
+        // notes above, so visitors never see it): Edit in Admin opens
+        // /admin?edit=<id>, which opens that monitor's edit form directly.
+        function attachAdminMenus() {
+            let menu = null, openBtn = null;
+            function close() {
+                if (menu) menu.classList.remove("open");
+                if (openBtn) openBtn.setAttribute("aria-expanded", "false");
+                openBtn = null;
+            }
+            function open(btn, id) {
+                if (openBtn === btn) return close();
+                close();
+                if (!menu) {
+                    menu = document.createElement("div");
+                    menu.className = "row-menu";
+                    menu.setAttribute("role", "menu");
+                    document.body.appendChild(menu);
+                    menu.addEventListener("click", (e) => e.stopPropagation());
+                }
+                menu.innerHTML = "";
+                [["Edit in Admin", "/admin?edit=" + id], ["View details", "/monitor/" + id]].forEach(([label, href]) => {
+                    const a = document.createElement("a");
+                    a.href = href; a.textContent = label; a.setAttribute("role", "menuitem");
+                    menu.appendChild(a);
+                });
+                menu.classList.add("open");
+                const r = btn.getBoundingClientRect();
+                const w = menu.offsetWidth, h = menu.offsetHeight;
+                let top = r.bottom + 4;
+                if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 4);
+                menu.style.top = top + "px";
+                menu.style.left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8)) + "px";
+                openBtn = btn;
+                btn.setAttribute("aria-expanded", "true");
+            }
+            document.querySelectorAll("#rows-box .Box-row[data-id]").forEach((row) => {
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "more-btn row-more";
+                btn.setAttribute("aria-haspopup", "menu");
+                btn.setAttribute("aria-expanded", "false");
+                btn.setAttribute("aria-label", "More actions");
+                btn.innerHTML = "&#x22EF;";
+                btn.addEventListener("click", (e) => { e.stopPropagation(); open(btn, row.dataset.id); });
+                row.appendChild(btn);
+            });
+            // Matching spacer so the header columns stay aligned with rows.
+            const firstBtn = document.querySelector("#rows-box .row-more");
+            const header = document.querySelector("#rows-box .header-row");
+            if (firstBtn && header) {
+                const spacer = document.createElement("span");
+                spacer.style.flex = "0 0 " + firstBtn.offsetWidth + "px";
+                header.appendChild(spacer);
+            }
+            document.addEventListener("click", close);
+            document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+            window.addEventListener("scroll", close, { passive: true });
+            window.addEventListener("resize", close);
+        }
         // Same lightweight markers as the admin page (escape first, so notes
         // can never inject markup). Duplicated there, since each page's
         // script runs separately in the browser.
@@ -1014,10 +1080,21 @@ export function renderAdminPage() {
             renderTargets();
         }
 
+        // /admin?edit=<id> (from the status page's "⋯ > Edit in Admin")
+        // opens that monitor's edit form once the list has loaded -- after
+        // the token is entered, if it wasn't saved yet. The param is then
+        // dropped from the URL so a refresh doesn't reopen the form.
+        let pendingEditId = Number(new URLSearchParams(location.search).get("edit")) || null;
         async function loadTargets() {
             try {
                 targets = await api("/admin/api/targets");
                 renderTargets();
+                if (pendingEditId) {
+                    const id = pendingEditId;
+                    pendingEditId = null;
+                    history.replaceState(null, "", location.pathname);
+                    if (targets.some((t) => t.id === id)) openEditModal(id);
+                }
             } catch (e) {}
         }
         // Builds the {name, type, host, port, tags, notes, config} payload
