@@ -160,7 +160,17 @@ const BASE_STYLE = `
     .form-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
     .form-row .field { flex: 1 1 160px; }
     .form-row .field.port { flex: 0 0 90px; }
-    .actions { display: flex; gap: 4px; flex: 0 0 520px; }
+    .actions { display: flex; gap: 4px; flex: 0 0 104px; justify-content: flex-end; }
+    .more-btn { font-weight: 700; letter-spacing: 1px; padding-left: 10px; padding-right: 10px; }
+    .row-menu {
+        position: fixed; z-index: 150; display: none; min-width: 170px; padding: 4px;
+        background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+    }
+    .row-menu.open { display: block; }
+    .row-menu button { display: block; width: 100%; text-align: left; border: 0; box-shadow: none; background: none; margin: 0; padding: 6px 10px; border-radius: 4px; }
+    .row-menu button:hover, .row-menu button:focus-visible { background: var(--btn-hover-bg); outline: none; }
+    .row-menu button.danger { color: var(--danger-fg); }
+    .row-menu-sep { height: 1px; background: var(--border-muted); margin: 4px 0; }
     .grow { flex: 1 1 auto; min-width: 0; }
     .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -191,6 +201,26 @@ const BASE_STYLE = `
     .modal { background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 8px; max-width: 640px; width: 100%; padding: 20px; }
     .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
     .modal-header h2 { font-size: 16px; font-weight: 600; margin: 0; }
+    /* Status-page groups (first tag) + summary line */
+    details.group > summary {
+        display: flex; align-items: center; gap: 8px; padding: 8px 16px; cursor: pointer; list-style: none;
+        background: var(--canvas-subtle); border-bottom: 1px solid var(--border-muted); font-weight: 600; user-select: none;
+    }
+    details.group > summary::-webkit-details-marker { display: none; }
+    details.group > summary:focus-visible { outline: 2px solid var(--accent-fg); outline-offset: -2px; }
+    details.group .chev { width: 0; height: 0; border-left: 5px solid var(--fg-muted); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform 0.15s; }
+    details.group[open] .chev { transform: rotate(90deg); }
+    .group-name { text-transform: capitalize; }
+    .group-counts { margin-left: auto; display: flex; gap: 12px; font-weight: 400; font-size: 12px; color: var(--fg-muted); }
+    .count-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+    .count-item .dot { width: 8px; height: 8px; }
+    details.group:last-child .Box-row:last-child { border-bottom: none; }
+    .summary-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; margin: -4px 0 12px; font-size: 14px; }
+    .summary-counts { display: flex; gap: 14px; }
+    .attention { color: var(--fg-muted); }
+    .attention a.down { color: var(--danger-fg); font-weight: 600; }
+    .attention a.pending { color: var(--fg-default); }
+    .all-ok { color: var(--success-fg); }
     /* Private notes on the status/archived pages -- only rendered client-side
        for a browser holding the admin token (see attachNotes()). */
     .note-btn { border: 0; background: none; padding: 0 2px; margin-left: 4px; color: var(--fg-muted); cursor: pointer; vertical-align: -2px; line-height: 0; }
@@ -235,7 +265,8 @@ const BASE_STYLE = `
     @media (max-width: 640px) {
         body { padding: 20px 12px; }
         .Box-row { flex-direction: column; align-items: flex-start; gap: 6px; }
-        .Box-row .actions { margin-left: 0; flex-wrap: wrap; width: 100%; }
+        .Box-row .actions { margin-left: 0; flex-wrap: wrap; width: 100%; justify-content: flex-start; }
+        .group-counts { gap: 8px; }
         /* Column widths are inline flex-basis values (e.g. flex: 0 0 170px);
            once the row stacks vertically those become *heights*, leaving
            huge gaps. Reset them to natural size here. */
@@ -293,6 +324,27 @@ function statusHtml(paused, isUp, checkedAt) {
     return `<span class="status-badge ${isUp ? "up" : "down"}">${isUp ? "Up" : "Down"}</span> &middot; ${timeAgo(checkedAt)}`;
 }
 
+// Status-page grouping: a monitor's *first* tag is its group (untagged ->
+// "Other"). Groups are collapsible <details> sections, alphabetical with
+// "Other" last; inside each, down/pending monitors sort first. A summary
+// line above lists totals and links straight to anything needing attention.
+const STATE_ORDER = { down: 0, pending: 1, up: 2, paused: 3 };
+function rowState(r) {
+    return r.paused ? "paused" : r.is_up == null ? "pending" : r.is_up ? "up" : "down";
+}
+function escHtml(s) {
+    return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function countsHtml(c) {
+    return ["down", "pending", "up", "paused"].filter((k) => c[k])
+        .map((k) => `<span class="count-item"><span class="dot ${k}"></span>${c[k]} ${k}</span>`).join("");
+}
+function countStates(rows) {
+    const c = { up: 0, down: 0, pending: 0, paused: 0 };
+    rows.forEach((r) => { c[rowState(r)]++; });
+    return c;
+}
+
 export function renderStatusPage(rows, { title = "Status", active = "status", emptyText = "No monitors match your search." } = {}) {
     const headerRow = `
         <div class="Box-row header-row">
@@ -304,9 +356,9 @@ export function renderStatusPage(rows, { title = "Status", active = "status", em
             <div style="min-width:70px">7d</div>
             <div style="min-width:90px">Last down</div>
         </div>`;
-    const items = rows.map((r) => `
-        <div class="Box-row" data-id="${r.id}" data-search="${(r.name + " " + r.host + " " + (r.tags || "")).toLowerCase()}">
-            <span class="dot ${r.paused ? "paused" : r.is_up == null ? "pending" : r.is_up ? "up" : "down"}"></span>
+    const rowHtml = (r) => `
+        <div class="Box-row" data-id="${r.id}" data-search="${escHtml((r.name + " " + r.host + " " + (r.tags || "")).toLowerCase())}">
+            <span class="dot ${rowState(r)}"></span>
             <div class="grow">
                 ${r.pinned ? '<span class="pin-badge">Pinned</span>' : ""}
                 <a href="/monitor/${r.id}"><strong>${r.name}</strong></a>
@@ -317,16 +369,74 @@ export function renderStatusPage(rows, { title = "Status", active = "status", em
             <div style="min-width:70px">${pct(r.uptime_24h)} <span class="mono">24h</span></div>
             <div style="min-width:70px">${pct(r.uptime_7d)} <span class="mono">7d</span></div>
             <div style="min-width:90px" class="mono">down ${timeAgo(r.last_down)}</div>
-        </div>`).join("");
+        </div>`;
+
+    const groups = new Map();
+    for (const r of rows) {
+        const key = tagList(r.tags)[0] || "Other";
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(r);
+    }
+    const keys = [...groups.keys()].sort((a, b) =>
+        (a === "Other") - (b === "Other") || a.localeCompare(b, undefined, { sensitivity: "base" }));
+    const groupsHtml = keys.map((key) => {
+        // Stable sort: problems first, otherwise keep the server's
+        // pinned-then-name order.
+        const list = groups.get(key).slice().sort((a, b) => STATE_ORDER[rowState(a)] - STATE_ORDER[rowState(b)]);
+        const c = countStates(list);
+        return `
+        <details class="group" data-group="${escHtml(key)}" data-has-down="${c.down ? 1 : 0}" open>
+            <summary><span class="chev" aria-hidden="true"></span><span class="group-name">${escHtml(key)}</span><span class="group-counts">${countsHtml(c)}</span></summary>
+            ${list.map(rowHtml).join("")}
+        </details>`;
+    }).join("");
+
+    const totals = countStates(rows);
+    const attention = rows.filter((r) => ["down", "pending"].includes(rowState(r)))
+        .sort((a, b) => STATE_ORDER[rowState(a)] - STATE_ORDER[rowState(b)]);
+    const summary = rows.length ? `
+        <div class="summary-bar">
+            <span class="summary-counts">${countsHtml(totals)}</span>
+            ${active === "status" ? (attention.length
+                ? `<span class="attention">Needs attention: ${attention.map((r) => `<a href="/monitor/${r.id}" class="${rowState(r)}">${r.name}</a>`).join(", ")}</span>`
+                : `<span class="all-ok">All monitors up</span>`) : ""}
+        </div>` : "";
 
     return pageShell(title, `
         ${navRow(active)}
         <h1 class="page-title">${title}</h1>
+        ${summary}
         <div class="search-box"><input id="search" placeholder="Search by name, host, or tag..." oninput="filterRows()"><span class="search-clear" id="search-clear" onclick="clearSearch()">&times;</span></div>
-        <div class="Box" id="rows-box">${headerRow}${items}</div>
+        <div class="Box" id="rows-box">${headerRow}${groupsHtml}</div>
         <p id="no-results" class="mono" style="display:none">${emptyText}</p>
         <footer>Checked every minute via Cloudflare Workers Cron Triggers + D1</footer>
         <script>
+        // Collapsed groups are remembered per browser and per page. A group
+        // with a down monitor always opens, so a problem can't hide inside
+        // a collapsed section. While searching, every group with a match is
+        // opened (without saving that), and the saved state comes back when
+        // the search is cleared.
+        const COLLAPSE_KEY = "status_collapsed_groups_${active}";
+        let collapsed = [];
+        try { collapsed = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || "[]"); } catch (e) {}
+        let applying = false;
+        function applySavedGroups() {
+            applying = true;
+            document.querySelectorAll("#rows-box details.group").forEach((d) => {
+                d.open = d.dataset.hasDown === "1" || !collapsed.includes(d.dataset.group);
+            });
+            setTimeout(() => { applying = false; }, 0);
+        }
+        document.querySelectorAll("#rows-box details.group").forEach((d) => {
+            d.addEventListener("toggle", () => {
+                if (applying || document.getElementById("search").value.trim()) return;
+                collapsed = collapsed.filter((g) => g !== d.dataset.group);
+                if (!d.open) collapsed.push(d.dataset.group);
+                try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsed)); } catch (e) {}
+            });
+        });
+        applySavedGroups();
+
         function clearSearch() {
             document.getElementById("search").value = "";
             filterRows();
@@ -335,13 +445,21 @@ export function renderStatusPage(rows, { title = "Status", active = "status", em
         function filterRows() {
             const q = document.getElementById("search").value.trim().toLowerCase();
             document.getElementById("search-clear").classList.toggle("visible", q.length > 0);
-            const rows = document.querySelectorAll("#rows-box .Box-row:not(.header-row)");
             let visible = 0;
-            rows.forEach((row) => {
-                const match = !q || row.dataset.search.includes(q);
-                row.style.display = match ? "" : "none";
-                if (match) visible++;
+            applying = true;
+            document.querySelectorAll("#rows-box details.group").forEach((d) => {
+                let inGroup = 0;
+                d.querySelectorAll(".Box-row").forEach((row) => {
+                    const match = !q || row.dataset.search.includes(q);
+                    row.style.display = match ? "" : "none";
+                    if (match) inGroup++;
+                });
+                d.style.display = inGroup ? "" : "none";
+                if (q && inGroup) d.open = true;
+                visible += inGroup;
             });
+            setTimeout(() => { applying = false; }, 0);
+            if (!q) applySavedGroups();
             document.getElementById("no-results").style.display = visible ? "none" : "block";
         }
         function filterByTag(tag) {
@@ -639,7 +757,7 @@ export function renderAdminPage() {
                 </div>
             </div>
             <div class="form-row" style="margin-top:8px">
-                <div class="field grow"><label>Tags</label><input id="new-tags" placeholder="comma-separated, e.g. singapore, production" /></div>
+                <div class="field grow"><label>Tags <span class="mono">(the first tag is its group on the Status page)</span></label><input id="new-tags" placeholder="comma-separated, e.g. mac, jellyfin" /></div>
             </div>
             <div class="field" style="margin-top:8px">
                 <label>Notes (admin-only, never public)</label>
@@ -759,12 +877,8 @@ export function renderAdminPage() {
                 <div style="flex:0 0 170px">\${tagPills(t.tags)}</div>
                 <div class="mono" style="flex:0 0 120px">\${stateText}</div>
                 <div class="actions">
-                    <button class="link" onclick="openEditModal(\${t.id})">Edit</button>
-                    <button onclick="togglePin(\${t.id}, \${t.pinned})">\${t.pinned ? 'Unpin' : 'Pin to top'}</button>
-                    <button onclick="togglePause(\${t.id}, \${t.paused})">\${t.paused ? 'Resume' : 'Pause'}</button>
-                    <button onclick="testNotify(\${t.id})">Test notify</button>
-                    <button class="danger" onclick="resetTarget(\${t.id})">Reset</button>
-                    <button class="danger" onclick="removeTarget(\${t.id})">Delete</button>
+                    <button onclick="openEditModal(\${t.id})">Edit</button>
+                    <button class="more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="More actions for \${t.name}" onclick="openRowMenu(event, \${t.id})">&#x22EF;</button>
                 </div>
             </div>\`;
         }
@@ -921,6 +1035,63 @@ export function renderAdminPage() {
             await api(\`/admin/api/targets/\${id}\`, { method: "DELETE" });
             loadTargets();
         }
+
+        // "⋯" row menu: keeps each admin row to Edit + one menu button
+        // instead of six buttons (much calmer on a phone). One shared menu
+        // element, rebuilt per open from the row's current pinned/paused
+        // state. Closes on outside click, Esc, scroll or resize.
+        let rowMenu = null, rowMenuBtn = null;
+        function closeRowMenu() {
+            if (rowMenu) rowMenu.classList.remove("open");
+            if (rowMenuBtn) rowMenuBtn.setAttribute("aria-expanded", "false");
+            rowMenuBtn = null;
+        }
+        function openRowMenu(e, id) {
+            e.stopPropagation();
+            const btn = e.currentTarget;
+            if (rowMenuBtn === btn) return closeRowMenu();
+            closeRowMenu();
+            const t = targets.find((x) => x.id === id);
+            if (!t) return;
+            if (!rowMenu) {
+                rowMenu = document.createElement("div");
+                rowMenu.className = "row-menu";
+                rowMenu.setAttribute("role", "menu");
+                document.body.appendChild(rowMenu);
+                rowMenu.addEventListener("click", (ev) => ev.stopPropagation());
+            }
+            const items = [
+                [t.pinned ? "Unpin" : "Pin to top", () => togglePin(id, t.pinned)],
+                [t.paused ? "Resume" : "Pause", () => togglePause(id, t.paused)],
+                ["Test notify", () => testNotify(id)],
+                null,
+                ["Reset history…", () => resetTarget(id), "danger"],
+                ["Delete…", () => removeTarget(id), "danger"],
+            ];
+            rowMenu.innerHTML = "";
+            items.forEach((it) => {
+                if (!it) { const hr = document.createElement("div"); hr.className = "row-menu-sep"; rowMenu.appendChild(hr); return; }
+                const b = document.createElement("button");
+                b.type = "button"; b.setAttribute("role", "menuitem"); b.textContent = it[0];
+                if (it[2]) b.className = it[2];
+                b.onclick = () => { closeRowMenu(); it[1](); };
+                rowMenu.appendChild(b);
+            });
+            rowMenu.classList.add("open");
+            const r = btn.getBoundingClientRect();
+            const w = rowMenu.offsetWidth, h = rowMenu.offsetHeight;
+            let top = r.bottom + 4;
+            if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 4);
+            rowMenu.style.top = top + "px";
+            rowMenu.style.left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8)) + "px";
+            rowMenuBtn = btn;
+            btn.setAttribute("aria-expanded", "true");
+            rowMenu.querySelector("button").focus();
+        }
+        document.addEventListener("click", closeRowMenu);
+        document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeRowMenu(); });
+        window.addEventListener("scroll", closeRowMenu, { passive: true });
+        window.addEventListener("resize", closeRowMenu);
 
         function getSelectedIds() {
             return Array.from(document.querySelectorAll(".row-checkbox:checked")).map((el) => Number(el.dataset.id));
