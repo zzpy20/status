@@ -175,6 +175,13 @@ const BASE_STYLE = `
     .search-clear.visible { display: flex; }
     .toolbar-row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
     .toolbar-row .search-box { flex: 1 1 auto; margin-bottom: 0; }
+    /* Active / Paused / All filter on the admin list */
+    .seg { display: inline-flex; flex-shrink: 0; border: 1px solid var(--btn-border); border-radius: 6px; overflow: hidden; }
+    .seg button { border: 0; border-radius: 0; margin: 0; white-space: nowrap; }
+    .seg button + button { border-left: 1px solid var(--btn-border); }
+    .seg button.active { background: var(--accent-fg); color: #fff; }
+    .seg .count { opacity: 0.75; font-variant-numeric: tabular-nums; }
+    .id-badge { color: var(--fg-muted); font-weight: 400; font-variant-numeric: tabular-nums; margin-right: 4px; }
 
     .modal-backdrop {
         display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5);
@@ -566,7 +573,12 @@ export function renderAdminPage() {
         </div>
 
         <div class="toolbar-row">
-            <div class="search-box"><input id="search" placeholder="Search by name, host, tag, or notes..." oninput="renderTargets()"><span class="search-clear" id="search-clear" onclick="clearSearch()">&times;</span></div>
+            <div class="search-box"><input id="search" placeholder="Search by name, #id, host, tag, or notes..." oninput="renderTargets()"><span class="search-clear" id="search-clear" onclick="clearSearch()">&times;</span></div>
+            <div class="seg" id="status-filter" role="group" aria-label="Show monitors">
+                <button type="button" data-filter="active" onclick="setStatusFilter('active')">Active <span class="count"></span></button>
+                <button type="button" data-filter="paused" onclick="setStatusFilter('paused')">Paused <span class="count"></span></button>
+                <button type="button" data-filter="all" onclick="setStatusFilter('all')">All <span class="count"></span></button>
+            </div>
             <button class="primary" onclick="openAddModal()">+ Add monitor</button>
         </div>
         <div id="bulk-toolbar" class="Box" style="display:none; padding:10px 16px; margin-bottom:12px; align-items:center; gap:8px; flex-wrap:wrap;">
@@ -574,6 +586,7 @@ export function renderAdminPage() {
             <button onclick="bulkAddTags()">Add tags</button>
             <button onclick="bulkRemoveTags()">Remove tags</button>
             <button onclick="bulkPause()">Pause</button>
+            <button onclick="bulkResume()">Resume</button>
             <button class="danger" onclick="bulkReset()">Reset</button>
             <button class="danger" onclick="bulkDelete()">Delete</button>
             <button class="link" onclick="clearSelection()">Clear selection</button>
@@ -730,13 +743,15 @@ export function renderAdminPage() {
             const dotClass = t.paused ? "paused" : (t.is_up == null ? "pending" : (t.is_up ? "up" : "down"));
             const stateText = t.paused ? "Paused" : (t.is_up == null ? "Pending first check" :
                 '<span class="status-badge ' + (t.is_up ? "up" : "down") + '">' + (t.is_up ? "Up" : "Down") + "</span> \\u00b7 " + timeAgo(t.checked_at));
-            const notesPreview = (t.notes || "").replace(/\\s+/g, " ").slice(0, 100);
+            // Escaped: this one-line preview is inserted as HTML (the full
+            // notes go through renderNotesHtml(), which escapes too).
+            const notesPreview = escapeHtml((t.notes || "").replace(/\\s+/g, " ").slice(0, 100));
             return \`<div class="Box-row" data-id="\${t.id}">
                 <input type="checkbox" class="row-checkbox" data-id="\${t.id}" onchange="updateBulkToolbar()" />
                 <span class="dot \${dotClass}"></span>
                 <div class="grow">
                     \${t.pinned ? '<span class="pin-badge">Pinned</span>' : ""}
-                    <strong>\${t.name}</strong>
+                    <strong><span class="id-badge">#\${t.id}</span>\${t.name}</strong>
                     <div class="mono">\${targetIdentifier(t)}</div>
                     \${t.notes ? \`<div class="notes-snippet" onclick="toggleNotes(\${t.id})">\${notesPreview}\${t.notes.length > 100 ? "…" : ""}</div>
                     <div class="notes-full" id="notes-full-\${t.id}" style="display:none">\${renderNotesHtml(t.notes)}</div>\` : ""}
@@ -794,6 +809,7 @@ export function renderAdminPage() {
 
         function matchesSearch(t, q) {
             if (!q) return true;
+            if (/^#\\d+$/.test(q)) return String(t.id) === q.slice(1); // "#13" finds monitor 13
             const haystack = [t.name, t.host, t.tags, t.notes].filter(Boolean).join(" ").toLowerCase();
             return haystack.includes(q);
         }
@@ -806,15 +822,35 @@ export function renderAdminPage() {
             '<div style="flex:0 0 120px">Status</div>' +
             '<div class="actions">Actions</div>' +
             '</div>';
+        // Active / Paused / All -- mirrors the public Status vs Archived split
+        // so paused monitors don't clutter the working list. Remembered per
+        // browser; defaults to Active. Counts reflect the current search.
+        const FILTER_KEY = "status_admin_filter";
+        let statusFilter = "active";
+        try { statusFilter = localStorage.getItem(FILTER_KEY) || "active"; } catch (e) {}
+        function setStatusFilter(f) {
+            statusFilter = f;
+            try { localStorage.setItem(FILTER_KEY, f); } catch (e) {}
+            clearSelection();
+            renderTargets();
+        }
         function renderTargets() {
             const q = (document.getElementById("search")?.value || "").trim().toLowerCase();
             document.getElementById("search-clear").classList.toggle("visible", q.length > 0);
-            const visible = targets.filter((t) => matchesSearch(t, q));
+            const matched = targets.filter((t) => matchesSearch(t, q));
+            const counts = { active: matched.filter((t) => !t.paused).length, paused: matched.filter((t) => t.paused).length, all: matched.length };
+            document.querySelectorAll("#status-filter button").forEach((b) => {
+                const f = b.dataset.filter;
+                b.classList.toggle("active", f === statusFilter);
+                b.setAttribute("aria-pressed", f === statusFilter ? "true" : "false");
+                b.querySelector(".count").textContent = counts[f];
+            });
+            const visible = matched.filter((t) => statusFilter === "all" || (statusFilter === "paused" ? t.paused : !t.paused));
+            const emptyText = !targets.length ? "No monitors yet -- add one below."
+                : q ? "No " + (statusFilter === "all" ? "" : statusFilter + " ") + "monitors match your search."
+                : statusFilter === "paused" ? "No paused monitors." : "No active monitors.";
             document.getElementById("targets-box").innerHTML = targetsHeaderRow + (
-                visible.map((t) => viewRow(t)).join("")
-                || (targets.length
-                    ? '<div class="Box-row mono">No monitors match your search.</div>'
-                    : '<div class="Box-row mono">No monitors yet -- add one below.</div>')
+                visible.map((t) => viewRow(t)).join("") || '<div class="Box-row mono">' + emptyText + '</div>'
             );
         }
         function clearSearch() {
@@ -918,6 +954,13 @@ export function renderAdminPage() {
             clearSelection();
             loadTargets();
         }
+        async function bulkResume() {
+            const ids = getSelectedIds();
+            if (!ids.length) return;
+            for (const id of ids) await api(\`/admin/api/targets/\${id}/resume\`, { method: "POST" });
+            clearSelection();
+            loadTargets();
+        }
         async function bulkReset() {
             const ids = getSelectedIds();
             if (!ids.length) return;
@@ -1015,7 +1058,7 @@ export function renderAdminPage() {
             if (!t) return;
             editingId = id;
             fillModalFields(t);
-            document.getElementById("modal-title").textContent = "Edit monitor";
+            document.getElementById("modal-title").textContent = "Edit monitor #" + id;
             document.getElementById("modal-submit-btn").textContent = "Save changes";
             document.getElementById("monitor-modal-backdrop").classList.add("open");
             modalSnapshot = snapshotModalFields();
