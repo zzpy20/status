@@ -45,7 +45,12 @@ async function runChecks(env) {
         try {
             const previousRows = await db.recentChecks(env.DB, target.id);
             const previousConfirmed = db.confirmedIsUp(previousRows);
-            const { isUp, latencyMs, reason } = await runCheck(target);
+            const result = await runCheck(target);
+            if (result === null) { // heartbeat that has never pushed -- stays pending
+                results.push({ target: target.name, isUp: null, error: null });
+                continue;
+            }
+            const { isUp, latencyMs, reason } = result;
             const checkedAt = Date.now();
             await db.insertCheck(env.DB, target, isUp, latencyMs, reason, checkedAt);
 
@@ -140,10 +145,12 @@ async function buildDetailData(env, id) {
     };
 }
 
-// notes are for the admin's own recall and never exposed on public routes
-// (the status page, /api/status, /monitor/:id) -- only via /admin/api/*.
-function stripNotes(rows) {
-    return rows.map(({ notes, ...rest }) => rest);
+// notes are for the admin's own recall, and push_token is the secret in a
+// heartbeat monitor's push URL (anyone holding it can mark the monitor up)
+// -- neither is ever exposed on public routes (the status page,
+// /api/status, /monitor/:id), only via /admin/api/*.
+function stripPrivate(rows) {
+    return rows.map(({ notes, push_token, ...rest }) => rest);
 }
 
 // Edge-caches a computed response for a few seconds on Cloudflare's own
@@ -220,7 +227,7 @@ export default {
 
         if (url.pathname === "/") {
             return withEdgeCache(request, ctx, async () => {
-                const rows = stripNotes(await db.statusRows(env.DB));
+                const rows = stripPrivate(await db.statusRows(env.DB));
                 return new Response(renderStatusPage(rows.filter((r) => !r.paused)), { headers: HTML_HEADERS });
             });
         }
@@ -233,7 +240,7 @@ export default {
         // alone moves it back onto "/".
         if (url.pathname === "/archived") {
             return withEdgeCache(request, ctx, async () => {
-                const rows = stripNotes(await db.statusRows(env.DB));
+                const rows = stripPrivate(await db.statusRows(env.DB));
                 return new Response(renderStatusPage(rows.filter((r) => r.paused), {
                     title: "Archived", active: "archived", emptyText: "No archived monitors.",
                 }), { headers: HTML_HEADERS });
@@ -242,7 +249,7 @@ export default {
 
         if (url.pathname === "/api/status") {
             return withEdgeCache(request, ctx, async () =>
-                Response.json(stripNotes(await db.statusRows(env.DB))));
+                Response.json(stripPrivate(await db.statusRows(env.DB))));
         }
 
         if (url.pathname.startsWith("/monitor/")) {
@@ -258,6 +265,22 @@ export default {
             return withEdgeCache(request, ctx, async () => {
                 const incidents = await db.allIncidents(env.DB);
                 return new Response(renderIncidentsPage(incidents), { headers: HTML_HEADERS });
+            });
+        }
+
+        // Heartbeat push endpoint -- the monitored thing calls this on its own
+        // schedule (e.g. `curl -fsS https://status.../push/<token>` from a
+        // launch agent). GET or POST so any client works. Never edge-cached:
+        // every hit must reach D1. One indexed single-row UPDATE per push,
+        // and an unknown token matches nothing (cheap 404).
+        if (url.pathname.startsWith("/push/")) {
+            if (request.method !== "GET" && request.method !== "POST") {
+                return new Response("Method not allowed", { status: 405 });
+            }
+            const token = url.pathname.split("/")[2] || "";
+            const ok = /^[0-9a-f]{32}$/.test(token) && await db.recordPush(env.DB, token, Date.now());
+            return new Response(ok ? "ok\n" : "Not found\n", {
+                status: ok ? 200 : 404, headers: { "content-type": "text/plain", "cache-control": "no-store" },
             });
         }
 

@@ -28,6 +28,12 @@ async function sendTestNotify(env, target) {
 // a sentinel (meaningless for those types), and 0 is falsy, so a plain
 // `!body.port` check would wrongly reject every valid http/dns monitor.
 function validateTargetBody(body) {
+    if (body.type === "heartbeat") {
+        if (!body.name) return "name is required";
+        const grace = Number(body.config && body.config.graceMinutes);
+        if (!Number.isInteger(grace) || grace < 2 || grace > 1440) return "grace period must be a whole number of minutes, 2-1440";
+        return null;
+    }
     if (!body.name || !body.host) return "name and host/URL/hostname are required";
     if ((body.type === "port" || !body.type) && !body.port) return "port is required for Port monitors";
     return null;
@@ -80,6 +86,7 @@ export async function handleAdminApi(request, env, url) {
             if (parts[2] === "pin") return Response.json(await db.setPinned(env.DB, id, true));
             if (parts[2] === "unpin") return Response.json(await db.setPinned(env.DB, id, false));
             if (parts[2] === "reset") { await db.resetTarget(env.DB, id); return Response.json({ reset: true }); }
+            if (parts[2] === "rotate-token") return Response.json(await db.rotatePushToken(env.DB, id));
             if (parts[2] === "test-notify") return Response.json(await sendTestNotify(env, target));
         }
     }

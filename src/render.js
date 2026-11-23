@@ -479,6 +479,7 @@ export function renderAdminPage() {
                         <option value="port">Port (TCP)</option>
                         <option value="http">HTTP</option>
                         <option value="dns">DNS</option>
+                        <option value="heartbeat">Heartbeat (push)</option>
                     </select>
                 </div>
             </div>
@@ -498,6 +499,16 @@ export function renderAdminPage() {
                     <select id="new-recordType"><option>A</option><option>AAAA</option><option>CNAME</option></select>
                 </div>
                 <div class="field grow"><label>Expected value</label><input id="new-expectedValue" placeholder="optional, e.g. 1.2.3.4" /></div>
+            </div>
+            <div id="new-fields-heartbeat" style="margin-top:8px; display:none">
+                <div class="form-row">
+                    <div class="field" style="flex:0 0 200px"><label>Grace period (minutes)</label><input id="new-graceMinutes" placeholder="5" type="number" min="2" /></div>
+                    <div class="field grow"><label>&nbsp;</label><div class="mono">Marked down if no push arrives within this window (confirmed on the next check, so alerts land ~1-2 min later).</div></div>
+                </div>
+                <div class="field" style="margin-top:8px">
+                    <label>Push URL</label>
+                    <div id="heartbeat-url-box" class="mono">Generated when you save.</div>
+                </div>
             </div>
             <div class="form-row" style="margin-top:8px">
                 <div class="field grow"><label>Tags</label><input id="new-tags" placeholder="comma-separated, e.g. singapore, production" /></div>
@@ -566,6 +577,8 @@ export function renderAdminPage() {
         }
         function targetIdentifier(t) {
             if (t.type === "http") return t.host;
+            if (t.type === "heartbeat") return "Heartbeat (every \u2264" + ((t.config && t.config.graceMinutes) || 5) + " min)" +
+                (t.last_push_at ? " \u00b7 last push " + timeAgo(t.last_push_at) : " \u00b7 no push yet");
             if (t.type === "dns") return t.host + " (" + ((t.config && t.config.recordType) || "A") + " record)";
             return t.host + ":" + t.port;
         }
@@ -626,8 +639,39 @@ export function renderAdminPage() {
             </div>\`;
         }
 
+        // Push URL is shown only for an already-saved heartbeat monitor (the
+        // token is minted server-side on save). Built with DOM APIs, not
+        // innerHTML, and includes a ready-to-paste curl line.
+        function renderPushUrl(t) {
+            const box = document.getElementById("heartbeat-url-box");
+            box.textContent = "";
+            if (!t || !t.push_token) { box.textContent = "Generated when you save."; return; }
+            const url = location.origin + "/push/" + t.push_token;
+            const code = document.createElement("code");
+            code.textContent = url;
+            code.style.userSelect = "all";
+            code.style.wordBreak = "break-all";
+            const copy = document.createElement("button");
+            copy.type = "button"; copy.className = "link"; copy.textContent = "Copy";
+            copy.onclick = () => navigator.clipboard.writeText(url).then(() => { copy.textContent = "Copied"; });
+            const rotate = document.createElement("button");
+            rotate.type = "button"; rotate.className = "danger"; rotate.textContent = "Rotate";
+            rotate.onclick = () => rotateToken(t.id);
+            const hint = document.createElement("div");
+            hint.textContent = "e.g. every minute: curl -fsS -m 10 " + url;
+            hint.style.marginTop = "4px";
+            box.append(code, " ", copy, " ", rotate, hint);
+        }
+        async function rotateToken(id) {
+            if (!confirm("Rotate the push URL? The old URL stops working immediately -- update every client that uses it.")) return;
+            const updated = await api(\`/admin/api/targets/\${id}/rotate-token\`, { method: "POST" });
+            const t = targets.find((x) => x.id === id);
+            if (t && updated && updated.push_token) { t.push_token = updated.push_token; renderPushUrl(t); }
+            loadTargets();
+        }
+
         function onTypeChange(prefix, type) {
-            ["port", "http", "dns"].forEach((t) => {
+            ["port", "http", "dns", "heartbeat"].forEach((t) => {
                 const el = document.getElementById(prefix + "-fields-" + t);
                 if (el) el.style.display = (t === type) ? "" : "none";
             });
@@ -693,6 +737,9 @@ export function renderAdminPage() {
                 host = get("dns-hostname");
                 config = { recordType: get("recordType") || "A" };
                 if (get("expectedValue")) config.expectedValue = get("expectedValue");
+            } else if (type === "heartbeat") {
+                host = "heartbeat"; // placeholder; the server ignores it for this type
+                config = { graceMinutes: Number(get("graceMinutes")) || 5 };
             } else {
                 host = get("port-host");
                 port = Number(get("port-num")) || 0;
@@ -808,16 +855,17 @@ export function renderAdminPage() {
         }
 
         function snapshotModalFields() {
-            const fields = ["name", "type", "port-host", "port-num", "http-url", "expectedStatus", "keyword", "dns-hostname", "recordType", "expectedValue", "tags", "notes"];
+            const fields = ["name", "type", "port-host", "port-num", "http-url", "expectedStatus", "keyword", "dns-hostname", "recordType", "expectedValue", "graceMinutes", "tags", "notes"];
             return fields.map((f) => { const el = document.getElementById("new-" + f); return el ? el.value : ""; }).join("\\u0001");
         }
         function clearModalFields() {
-            ["name", "port-host", "port-num", "http-url", "expectedStatus", "keyword", "dns-hostname", "expectedValue", "tags", "notes"].forEach((field) => {
+            ["name", "port-host", "port-num", "http-url", "expectedStatus", "keyword", "dns-hostname", "expectedValue", "graceMinutes", "tags", "notes"].forEach((field) => {
                 const el = document.getElementById("new-" + field);
                 if (el) el.value = "";
             });
             document.getElementById("new-type").value = "port";
             document.getElementById("new-recordType").value = "A";
+            renderPushUrl(null);
             onTypeChange("new", "port");
         }
         function fillModalFields(t) {
@@ -834,6 +882,8 @@ export function renderAdminPage() {
             document.getElementById("new-dns-hostname").value = type === "dns" ? (t.host || "") : "";
             document.getElementById("new-recordType").value = cfg.recordType || "A";
             document.getElementById("new-expectedValue").value = cfg.expectedValue || "";
+            document.getElementById("new-graceMinutes").value = type === "heartbeat" ? (cfg.graceMinutes || 5) : "";
+            renderPushUrl(type === "heartbeat" ? t : null);
             document.getElementById("new-tags").value = t.tags || "";
             document.getElementById("new-notes").value = t.notes || "";
         }

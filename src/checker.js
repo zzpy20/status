@@ -73,8 +73,23 @@ export async function checkDns(hostname, { recordType = "A", expectedValue } = {
     }
 }
 
+export const DEFAULT_GRACE_MINUTES = 5;
+
+// Heartbeat: the target pushes to /push/:token; this just judges freshness.
+// Returns null when the target has never pushed, so runChecks() records
+// nothing and it stays "Pending first check" instead of alerting on a
+// monitor whose client hasn't been set up yet.
+export function checkHeartbeat(target, now = Date.now()) {
+    if (target.last_push_at == null) return null;
+    const graceMinutes = Number(target.config && target.config.graceMinutes) || DEFAULT_GRACE_MINUTES;
+    const ageMs = now - target.last_push_at;
+    if (ageMs <= graceMinutes * 60 * 1000) return { isUp: true, latencyMs: null };
+    return { isUp: false, latencyMs: null, reason: `No heartbeat for ${Math.floor(ageMs / 60000)} min` };
+}
+
 export async function runCheck(target) {
     const config = target.config || {};
+    if (target.type === "heartbeat") return checkHeartbeat(target);
     if (target.type === "http") return checkHttp(target.host, config);
     if (target.type === "dns") return checkDns(target.host, config);
     return checkPort(target.host, target.port);

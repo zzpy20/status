@@ -4,6 +4,7 @@
 // browser, not the Worker.
 export function targetIdentifier(t) {
     if (t.type === "http") return t.host;
+    if (t.type === "heartbeat") return `Heartbeat (every ≤${(t.config && t.config.graceMinutes) || 5} min)`;
     if (t.type === "dns") return `${t.host} (${(t.config && t.config.recordType) || "A"} record)`;
     return `${t.host}:${t.port}`;
 }

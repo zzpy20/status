@@ -92,6 +92,10 @@ export async function statusRows(db) {
             pinned: t.pinned,
             tags: t.tags,
             notes: t.notes,
+            // Stripped from every public route by stripPrivate() in index.js;
+            // only the admin UI needs it, to show the push URL.
+            push_token: t.push_token ?? null,
+            last_push_at: t.last_push_at ?? null,
             is_up: confirmedIsUp(recent),
             checked_at: last ? last.checked_at : null,
             uptime_24h: uptime24h.pct,
@@ -113,18 +117,51 @@ export async function getTarget(db, id) {
     return parseTarget(await db.prepare("SELECT * FROM targets WHERE id = ?").bind(id).first());
 }
 
+// 128 bits of randomness, hex -- the push URL's only credential.
+export function newPushToken() {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Heartbeat monitors have no real host -- `host` is NOT NULL (migration
+// 0002) and doubles as the search/identifier field, so it gets a fixed
+// placeholder rather than the token (host is public; the token is not).
+const HEARTBEAT_HOST = "heartbeat";
+
 export async function createTarget(db, { name, host, port, type, tags, notes, config }) {
+    const isHeartbeat = type === "heartbeat";
     const { meta } = await db.prepare(
-        "INSERT INTO targets (name, host, port, type, paused, tags, notes, config, created_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)"
-    ).bind(name, host, port || 0, type || "port", tags || null, notes || null, config ? JSON.stringify(config) : null, Date.now()).run();
+        "INSERT INTO targets (name, host, port, type, paused, tags, notes, config, push_token, created_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)"
+    ).bind(name, isHeartbeat ? HEARTBEAT_HOST : host, port || 0, type || "port", tags || null, notes || null,
+        config ? JSON.stringify(config) : null, isHeartbeat ? newPushToken() : null, Date.now()).run();
     return getTarget(db, meta.last_row_id);
 }
 
+// Keeps an existing push_token across edits (so the client's URL keeps
+// working), mints one if a target is switched *to* heartbeat, and leaves
+// it alone otherwise -- switching away and back keeps the same URL.
 export async function updateTarget(db, id, { name, host, port, type, tags, notes, config }) {
+    const isHeartbeat = type === "heartbeat";
     await db.prepare(
-        "UPDATE targets SET name = ?, host = ?, port = ?, type = ?, tags = ?, notes = ?, config = ? WHERE id = ?"
-    ).bind(name, host, port || 0, type || "port", tags || null, notes || null, config ? JSON.stringify(config) : null, id).run();
+        "UPDATE targets SET name = ?, host = ?, port = ?, type = ?, tags = ?, notes = ?, config = ?, push_token = COALESCE(push_token, ?) WHERE id = ?"
+    ).bind(name, isHeartbeat ? HEARTBEAT_HOST : host, port || 0, type || "port", tags || null, notes || null,
+        config ? JSON.stringify(config) : null, isHeartbeat ? newPushToken() : null, id).run();
     return getTarget(db, id);
+}
+
+// Invalidates the old push URL immediately (e.g. if it leaked).
+export async function rotatePushToken(db, id) {
+    await db.prepare("UPDATE targets SET push_token = ? WHERE id = ? AND type = 'heartbeat'").bind(newPushToken(), id).run();
+    return getTarget(db, id);
+}
+
+// Returns true if the token matched a heartbeat monitor. Paused monitors
+// still record pushes (cheap, and means Resume shows the true state at once).
+export async function recordPush(db, token, at) {
+    const { meta } = await db.prepare(
+        "UPDATE targets SET last_push_at = ? WHERE push_token = ? AND type = 'heartbeat'"
+    ).bind(at, token).run();
+    return meta.changes > 0;
 }
 
 export async function deleteTarget(db, id) {
