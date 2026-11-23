@@ -247,6 +247,7 @@ const BASE_STYLE = `
         border-radius: 12px; padding: 1px 8px; font-size: 11px; font-weight: 600;
         margin: 3px 4px 0 0;
     }
+    .phone-meta { display: none; }
     .notes-snippet { font-size: 12px; color: var(--fg-muted); margin-top: 3px; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
     .notes-snippet:hover { color: var(--accent-fg); }
     .notes-full { font-size: 13px; line-height: 1.6; color: var(--fg-default); margin-top: 6px; padding: 10px 12px; background: var(--canvas-subtle); border: 1px solid var(--border-muted); border-radius: 6px; max-width: 600px; }
@@ -285,6 +286,19 @@ const BASE_STYLE = `
         #rows-box .Box-row > .col-status { order: 1; white-space: nowrap; font-size: 13px; }
         #rows-box .Box-row > .col-stat { order: 3; min-width: 0 !important; font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
         #rows-box .col-status + .col-stat { margin-left: 18px; }
+        /* Admin rows on phones: line 1 = checkbox, dot, #id name, Edit/⋯;
+           line 2 = status · what it checks; optional line 3 = notes preview
+           (tap to expand, as on desktop). Tags hidden, like the status page. */
+        #targets-box .Box-row:not(.header-row) { flex-direction: row; flex-wrap: nowrap; align-items: flex-start; gap: 10px; padding: 10px 12px; }
+        #targets-box .Box-row > input[type="checkbox"] { margin-top: 2px; }
+        #targets-box .Box-row > .dot { margin-top: 6px; }
+        #targets-box .Box-row > .col-name { flex: 1 1 0 !important; min-width: 0; }
+        #targets-box .row-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #targets-box .col-ident, #targets-box .col-tags, #targets-box .col-status { display: none; }
+        #targets-box .phone-meta { display: block; font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #targets-box .notes-snippet { max-width: 100%; }
+        #targets-box .wide-only { display: none; }
+        #targets-box .Box-row > .actions { width: auto; flex-wrap: nowrap; }
         /* Column widths are inline flex-basis values (e.g. flex: 0 0 170px);
            once the row stacks vertically those become *heights*, leaving
            huge gaps. Reset them to natural size here. */
@@ -877,7 +891,7 @@ export function renderAdminPage() {
         }
         function viewRow(t) {
             const dotClass = t.paused ? "paused" : (t.is_up == null ? "pending" : (t.is_up ? "up" : "down"));
-            const stateText = t.paused ? "Paused" : (t.is_up == null ? "Pending first check" :
+            const stateText = t.paused ? "Paused" : (t.is_up == null ? 'Pending<span class="wide-only"> first check</span>' :
                 '<span class="status-badge ' + (t.is_up ? "up" : "down") + '">' + (t.is_up ? "Up" : "Down") + "</span> \\u00b7 " + timeAgo(t.checked_at));
             // Escaped: this one-line preview is inserted as HTML (the full
             // notes go through renderNotesHtml(), which escapes too).
@@ -885,15 +899,15 @@ export function renderAdminPage() {
             return \`<div class="Box-row" data-id="\${t.id}">
                 <input type="checkbox" class="row-checkbox" data-id="\${t.id}" onchange="updateBulkToolbar()" />
                 <span class="dot \${dotClass}"></span>
-                <div class="grow">
-                    \${t.pinned ? '<span class="pin-badge">Pinned</span>' : ""}
-                    <strong><span class="id-badge">#\${t.id}</span>\${t.name}</strong>
-                    <div class="mono">\${targetIdentifier(t)}</div>
+                <div class="grow col-name">
+                    <strong class="row-title">\${t.pinned ? '<span class="pin-badge">Pinned</span>' : ""}<span class="id-badge">#\${t.id}</span>\${t.name}</strong>
+                    <div class="mono col-ident">\${targetIdentifier(t)}</div>
+                    <div class="mono phone-meta">\${stateText} \\u00b7 \${targetIdentifier(t)}</div>
                     \${t.notes ? \`<div class="notes-snippet" onclick="toggleNotes(\${t.id})">\${notesPreview}\${t.notes.length > 100 ? "…" : ""}</div>
                     <div class="notes-full" id="notes-full-\${t.id}" style="display:none">\${renderNotesHtml(t.notes)}</div>\` : ""}
                 </div>
-                <div style="flex:0 0 170px">\${tagPills(t.tags)}</div>
-                <div class="mono" style="flex:0 0 120px">\${stateText}</div>
+                <div class="col-tags" style="flex:0 0 170px">\${tagPills(t.tags)}</div>
+                <div class="mono col-status" style="flex:0 0 120px">\${stateText}</div>
                 <div class="actions">
                     <button onclick="openEditModal(\${t.id})">Edit</button>
                     <button class="more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="More actions for \${t.name}" onclick="openRowMenu(event, \${t.id})">&#x22EF;</button>
