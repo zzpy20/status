@@ -184,6 +184,9 @@ const BASE_STYLE = `
     .modal { background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 8px; max-width: 640px; width: 100%; padding: 20px; }
     .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
     .modal-header h2 { font-size: 16px; font-weight: 600; margin: 0; }
+    /* Nudge shown when a backdrop click is ignored because the form has unsaved changes. */
+    @keyframes modal-nudge { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+    .modal.nudge { animation: modal-nudge 0.25s ease-in-out 2; }
     .tag-pill {
         display: inline-block; background: var(--btn-bg); border: 1px solid var(--btn-border);
         border-radius: 12px; padding: 1px 8px; font-size: 11px; color: var(--fg-muted);
@@ -465,8 +468,8 @@ export function renderAdminPage() {
         </div>
         <div class="Box" id="targets-box"></div>
 
-        <div class="modal-backdrop" id="monitor-modal-backdrop" onclick="if (event.target === this) closeModal()">
-        <div class="modal">
+        <div class="modal-backdrop" id="monitor-modal-backdrop" onmousedown="backdropPressed = (event.target === this)" onclick="onBackdropClick(event, this)">
+        <div class="modal" id="monitor-modal">
             <div class="modal-header">
                 <h2 id="modal-title">Add monitor</h2>
                 <button class="link" onclick="closeModal()">Close</button>
@@ -916,6 +919,32 @@ export function renderAdminPage() {
             modalSnapshot = null;
         }
         document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+
+        // Guards against losing a half-filled Add/Edit form by accident:
+        // 1. A click only counts as "outside" if the press *started* on the
+        //    backdrop -- selecting text in a field and releasing the mouse
+        //    past the modal edge used to land a click on the backdrop and
+        //    close it.
+        // 2. With unsaved changes, an outside click never closes (not even
+        //    behind a confirm, which is easy to OK by reflex) -- the modal
+        //    just nudges. Close / Esc still work, with the confirm.
+        // 3. Reloading or leaving the page with unsaved changes asks first.
+        let backdropPressed = false;
+        function modalDirty() {
+            const open = document.getElementById("monitor-modal-backdrop").classList.contains("open");
+            return open && modalSnapshot !== null && snapshotModalFields() !== modalSnapshot;
+        }
+        function onBackdropClick(e, backdrop) {
+            const pressedHere = backdropPressed;
+            backdropPressed = false;
+            if (e.target !== backdrop || !pressedHere) return;
+            if (!modalDirty()) return closeModal(true);
+            const m = document.getElementById("monitor-modal");
+            m.classList.remove("nudge"); void m.offsetWidth; m.classList.add("nudge");
+        }
+        window.addEventListener("beforeunload", (e) => {
+            if (modalDirty()) { e.preventDefault(); e.returnValue = ""; }
+        });
 
         async function saveModal() {
             const get = (field) => {
