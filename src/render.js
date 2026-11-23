@@ -267,6 +267,24 @@ const BASE_STYLE = `
         .Box-row { flex-direction: column; align-items: flex-start; gap: 6px; }
         .Box-row .actions { margin-left: 0; flex-wrap: wrap; width: 100%; justify-content: flex-start; }
         .group-counts { gap: 8px; }
+        /* Status/Archived rows on phones: a compact two-line card.
+           Line 1: dot, name (ellipsized), status on the right.
+           Line 2: 24h · 7d · last down, small and muted, under the name.
+           The ::after item with flex-basis 100% forces the line break.
+           Host line and tag pills are hidden here (the group heading shows
+           the main tag; the monitor's detail page has the host). Scoped to
+           #rows-box so the admin list keeps its own layout. */
+        #rows-box .Box-row { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 2px 10px; padding: 10px 14px; }
+        #rows-box .Box-row::after { content: ""; order: 2; flex-basis: 100%; height: 0; }
+        #rows-box .Box-row > .dot { order: 1; }
+        #rows-box .Box-row > .col-name { order: 1; flex: 1 1 0 !important; min-width: 0; display: flex; align-items: center; }
+        #rows-box .col-name a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #rows-box .col-name .pin-badge { flex-shrink: 0; }
+        #rows-box .col-name .note-btn { flex-shrink: 0; }
+        #rows-box .col-ident, #rows-box .col-tags, #rows-box .wide-only { display: none; }
+        #rows-box .Box-row > .col-status { order: 1; white-space: nowrap; font-size: 13px; }
+        #rows-box .Box-row > .col-stat { order: 3; min-width: 0 !important; font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
+        #rows-box .col-status + .col-stat { margin-left: 18px; }
         /* Column widths are inline flex-basis values (e.g. flex: 0 0 170px);
            once the row stacks vertically those become *heights*, leaving
            huge gaps. Reset them to natural size here. */
@@ -320,7 +338,7 @@ function tagPillsHtml(tagsString, onclick) {
 
 function statusHtml(paused, isUp, checkedAt) {
     if (paused) return "Paused";
-    if (isUp == null) return "Pending first check";
+    if (isUp == null) return 'Pending<span class="wide-only"> first check</span>';
     return `<span class="status-badge ${isUp ? "up" : "down"}">${isUp ? "Up" : "Down"}</span> &middot; ${timeAgo(checkedAt)}`;
 }
 
@@ -359,16 +377,16 @@ export function renderStatusPage(rows, { title = "Status", active = "status", em
     const rowHtml = (r) => `
         <div class="Box-row" data-id="${r.id}" data-search="${escHtml((r.name + " " + r.host + " " + (r.tags || "")).toLowerCase())}">
             <span class="dot ${rowState(r)}"></span>
-            <div class="grow">
+            <div class="grow col-name">
                 ${r.pinned ? '<span class="pin-badge">Pinned</span>' : ""}
                 <a href="/monitor/${r.id}"><strong>${r.name}</strong></a>
-                <div class="mono">${targetIdentifier(r)}</div>
+                <div class="mono col-ident">${targetIdentifier(r)}</div>
             </div>
-            <div style="flex:0 0 170px">${tagPillsHtml(r.tags, "filterByTag")}</div>
-            <div style="flex:0 0 120px">${statusHtml(r.paused, r.is_up, r.checked_at)}</div>
-            <div style="min-width:70px">${pct(r.uptime_24h)} <span class="mono">24h</span></div>
-            <div style="min-width:70px">${pct(r.uptime_7d)} <span class="mono">7d</span></div>
-            <div style="min-width:90px" class="mono">down ${timeAgo(r.last_down)}</div>
+            <div class="col-tags" style="flex:0 0 170px">${tagPillsHtml(r.tags, "filterByTag")}</div>
+            <div class="col-status" style="flex:0 0 120px">${statusHtml(r.paused, r.is_up, r.checked_at)}</div>
+            <div class="col-stat" style="min-width:70px">${pct(r.uptime_24h)} <span class="mono">24h</span></div>
+            <div class="col-stat" style="min-width:70px">${pct(r.uptime_7d)} <span class="mono">7d</span></div>
+            <div class="col-stat mono" style="min-width:90px">down ${timeAgo(r.last_down)}</div>
         </div>`;
 
     const groups = new Map();
