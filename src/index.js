@@ -1,4 +1,4 @@
-import { runCheck } from "./checker.js";
+import { runCheck, heartbeatIntervalMinutes } from "./checker.js";
 import * as db from "./db.js";
 import { renderStatusPage, renderDetailPage, renderAdminPage, renderIncidentsPage } from "./render.js";
 import { handleAdminApi } from "./admin.js";
@@ -38,10 +38,14 @@ async function notifyStateChange(env, target, isUp) {
     });
 }
 
-async function runChecks(env) {
+async function runChecks(env, scheduledTime = Date.now()) {
     const targets = await db.listTargets(env.DB, { includePaused: false });
     const results = [];
+    const tickMinute = Math.floor(scheduledTime / 60000);
     for (const target of targets) {
+        // Heartbeats are evaluated every heartbeatIntervalMinutes() cron
+        // ticks, not every tick -- skipped before any D1 read or write.
+        if (target.type === "heartbeat" && tickMinute % heartbeatIntervalMinutes(target) !== 0) continue;
         try {
             const previousRows = await db.recentChecks(env.DB, target.id);
             const previousConfirmed = db.confirmedIsUp(previousRows);
@@ -189,7 +193,7 @@ async function withEdgeCache(request, ctx, compute) {
 
 export default {
     async scheduled(event, env, ctx) {
-        ctx.waitUntil(runChecks(env));
+        ctx.waitUntil(runChecks(env, event.scheduledTime));
         ctx.waitUntil(syncDnsAll(env).then((results) => {
             for (const r of results) console.log(JSON.stringify(r));
         }));

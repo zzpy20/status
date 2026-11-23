@@ -75,6 +75,17 @@ export async function checkDns(hostname, { recordType = "A", expectedValue } = {
 
 export const DEFAULT_GRACE_MINUTES = 5;
 
+// How often (in cron minutes) a heartbeat monitor is evaluated: about half
+// its grace period, 1-30 min. Its state can only change when a push arrives
+// or the grace runs out, so checking every minute just burns D1 writes
+// (~3.7 rows per check: checks row + its index + the daily_stats upsert).
+// grace 3 -> every 1 min, 5 -> 2, 90 / 1560 / 10800 -> 30. See
+// docs/incidents/2026-09-06-d1-quota-exhaustion.md for why writes matter.
+export function heartbeatIntervalMinutes(target) {
+    const grace = Number(target.config && target.config.graceMinutes) || DEFAULT_GRACE_MINUTES;
+    return Math.min(30, Math.max(1, Math.floor(grace / 2)));
+}
+
 // Heartbeat: the target pushes to /push/:token; this just judges freshness.
 // Returns null when the target has never pushed, so runChecks() records
 // nothing and it stays "Pending first check" instead of alerting on a

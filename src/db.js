@@ -60,6 +60,39 @@ function parseTarget(row) {
     return { ...row, config };
 }
 
+// Cheap uptime for the list views (Status, Archived, /api/status, the admin
+// list), read from daily_stats alone: at most 8 one-row-per-day buckets per
+// target, instead of scanning a full day of raw checks twice (~2,900 rows
+// per target per view -- ~72K rows per page view at 25 monitors, which put
+// the account's 5M/day D1 read quota within reach of a few dozen views).
+// insertCheck() upserts today's bucket on every check, so today's row is
+// always current.
+//   7d:  every bucket from the day containing now-7d through today
+//        (same window rule as uptimeStatsFast()). Exact.
+//   24h: today's bucket + yesterday's bucket scaled by the share of
+//        yesterday still inside the last 24h. Approximate (assumes checks
+//        were spread evenly across yesterday); the detail page keeps the
+//        exact raw-checks figure.
+export async function listUptimeStats(db, targetId, now = Date.now()) {
+    const todayStart = Math.floor(now / DAY) * DAY;
+    const weekStart = Math.floor((now - WEEK) / DAY) * DAY;
+    const { results } = await db.prepare(
+        "SELECT day, up_count, down_count FROM daily_stats WHERE target_id = ? AND day >= ?"
+    ).bind(targetId, weekStart).all();
+    let up7 = 0, total7 = 0, up24 = 0, total24 = 0;
+    const yesterdayShare = (DAY - (now - todayStart)) / DAY;
+    for (const r of results) {
+        const total = r.up_count + r.down_count;
+        up7 += r.up_count; total7 += total;
+        if (r.day === todayStart) { up24 += r.up_count; total24 += total; }
+        else if (r.day === todayStart - DAY) { up24 += r.up_count * yesterdayShare; total24 += total * yesterdayShare; }
+    }
+    return {
+        uptime24h: { pct: total24 > 0 ? (up24 * 100.0 / total24) : null, samples: Math.round(total24) },
+        uptime7d: { pct: total7 > 0 ? (up7 * 100.0 / total7) : null, samples: total7 },
+    };
+}
+
 // Shared by the public status page/API and the admin UI, so both always
 // show the same real up/down state -- the admin list previously only knew
 // about paused/not-paused and never looked at actual check results.
@@ -69,8 +102,8 @@ export async function statusRows(db) {
     return Promise.all(targets.map(async (t) => {
         const recent = await recentChecks(db, t.id);
         const last = recent[0] ?? null;
-        const uptime24h = await uptimeStats(db, t.id, now - DAY);
-        const uptime7d = await uptimeStatsFast(db, t.id, now - WEEK);
+        // From daily_stats only (~8 tiny rows) -- see listUptimeStats().
+        const { uptime24h, uptime7d } = await listUptimeStats(db, t.id, now);
         // Last *confirmed* incident, not just the last lone failed check --
         // otherwise a single blip that never became a real incident still
         // shows up here, contradicting the incidents list on the detail page.
