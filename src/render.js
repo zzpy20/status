@@ -504,7 +504,7 @@ export function renderStatusPage(rows, { title = "Status", active = "status", em
         // Private notes: shown only in a browser that has the admin token
         // saved (from /admin). Fetched here, client-side, so they never enter
         // this edge-cached public HTML; visitors without the token see no
-        // change at all. Desktop: hover a row (short delay) and the note card
+        // change at all. Desktop: hover a name (short delay) and the note card
         // appears under its name -- the mouse can move into the card to
         // select text. Touch: tap the note icon. Esc / outside tap / scroll
         // closes it.
@@ -578,14 +578,19 @@ export function renderStatusPage(rows, { title = "Status", active = "status", em
                 });
                 const link = row.querySelector("a");
                 (link || row.querySelector(".grow")).insertAdjacentElement("afterend", btn);
+                // Hover trigger is only the name and the note icon, not the
+                // whole row -- moving the mouse down the list toward
+                // something else shouldn't keep popping cards open.
                 if (canHover) {
-                    row.addEventListener("mouseenter", () => {
-                        clearTimeout(hideTimer); clearTimeout(showTimer);
-                        if (current !== row) showTimer = setTimeout(() => show(row), current ? 0 : 300);
-                    });
-                    row.addEventListener("mouseleave", () => {
-                        clearTimeout(showTimer);
-                        hideTimer = setTimeout(hide, 200);
+                    [link, btn].filter(Boolean).forEach((el) => {
+                        el.addEventListener("mouseenter", () => {
+                            clearTimeout(hideTimer); clearTimeout(showTimer);
+                            if (current !== row) showTimer = setTimeout(() => show(row), current ? 0 : 300);
+                        });
+                        el.addEventListener("mouseleave", () => {
+                            clearTimeout(showTimer);
+                            hideTimer = setTimeout(hide, 200);
+                        });
                     });
                 }
             });
