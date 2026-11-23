@@ -174,6 +174,7 @@ const BASE_STYLE = `
     .row-menu a { display: block; padding: 6px 10px; border-radius: 4px; color: var(--fg-default); text-decoration: none; white-space: nowrap; }
     .row-menu a:hover, .row-menu a:focus-visible { background: var(--btn-hover-bg); outline: none; }
     .row-more { flex-shrink: 0; padding: 2px 8px; line-height: 1.2; }
+    .title-more { margin-left: 8px; padding: 2px 8px; line-height: 1.2; font-size: 14px; vertical-align: middle; }
     .grow { flex: 1 1 auto; min-width: 0; }
     .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -360,6 +361,65 @@ function statusHtml(paused, isUp, checkedAt) {
     return `<span class="status-badge ${isUp ? "up" : "down"}">${isUp ? "Up" : "Down"}</span> &middot; ${timeAgo(checkedAt)}`;
 }
 
+// Client-side "⋯" link menu for admin shortcuts on public pages (Status,
+// Archived, monitor detail). Inlined into each page's <script>; only ever
+// called when the browser holds the admin token. adminMenuButton(cls,
+// itemsFn) returns a button that opens a small menu of [label, href]
+// links; one shared menu element, closed on outside click, Esc, scroll
+// or resize. Uses the same .row-menu styles as the admin row menu.
+const ADMIN_MENU_JS = `
+        let adminMenuEl = null, adminMenuBtn = null;
+        function closeAdminMenu() {
+            if (adminMenuEl) adminMenuEl.classList.remove("open");
+            if (adminMenuBtn) adminMenuBtn.setAttribute("aria-expanded", "false");
+            adminMenuBtn = null;
+        }
+        function openAdminMenu(btn, items) {
+            if (adminMenuBtn === btn) return closeAdminMenu();
+            closeAdminMenu();
+            if (!adminMenuEl) {
+                adminMenuEl = document.createElement("div");
+                adminMenuEl.className = "row-menu";
+                adminMenuEl.setAttribute("role", "menu");
+                document.body.appendChild(adminMenuEl);
+                adminMenuEl.addEventListener("click", (e) => e.stopPropagation());
+                document.addEventListener("click", closeAdminMenu);
+                document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeAdminMenu(); });
+                window.addEventListener("scroll", closeAdminMenu, { passive: true });
+                window.addEventListener("resize", closeAdminMenu);
+            }
+            adminMenuEl.innerHTML = "";
+            items.forEach(([label, href]) => {
+                const a = document.createElement("a");
+                a.href = href; a.textContent = label; a.setAttribute("role", "menuitem");
+                adminMenuEl.appendChild(a);
+            });
+            adminMenuEl.classList.add("open");
+            const r = btn.getBoundingClientRect();
+            const w = adminMenuEl.offsetWidth, h = adminMenuEl.offsetHeight;
+            let top = r.bottom + 4;
+            if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 4);
+            adminMenuEl.style.top = top + "px";
+            adminMenuEl.style.left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8)) + "px";
+            adminMenuBtn = btn;
+            btn.setAttribute("aria-expanded", "true");
+        }
+        function adminMenuButton(cls, itemsFn) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "more-btn " + cls;
+            btn.setAttribute("aria-haspopup", "menu");
+            btn.setAttribute("aria-expanded", "false");
+            btn.setAttribute("aria-label", "More actions");
+            btn.innerHTML = "&#x22EF;";
+            btn.addEventListener("click", (e) => { e.stopPropagation(); e.preventDefault(); openAdminMenu(btn, itemsFn()); });
+            return btn;
+        }
+        function hasAdminToken() {
+            try { return !!localStorage.getItem("status_admin_token"); } catch (e) { return false; }
+        }
+`;
+
 // Status-page grouping: a monitor's *first* tag is its group (untagged ->
 // "Other"). Groups are collapsible <details> sections, alphabetical with
 // "Other" last; inside each, down/pending monitors sort first. A summary
@@ -524,51 +584,15 @@ export function renderStatusPage(rows, { title = "Status", active = "status", em
         })();
 
         // Admin-only "⋯" at the end of each row (same token check as the
-        // notes above, so visitors never see it): Edit in Admin opens
-        // /admin?edit=<id>, which opens that monitor's edit form directly.
+        // notes above, so visitors never see it). Menu mechanics live in
+        // ADMIN_MENU_JS, shared with the monitor detail page.
         function attachAdminMenus() {
-            let menu = null, openBtn = null;
-            function close() {
-                if (menu) menu.classList.remove("open");
-                if (openBtn) openBtn.setAttribute("aria-expanded", "false");
-                openBtn = null;
-            }
-            function open(btn, id) {
-                if (openBtn === btn) return close();
-                close();
-                if (!menu) {
-                    menu = document.createElement("div");
-                    menu.className = "row-menu";
-                    menu.setAttribute("role", "menu");
-                    document.body.appendChild(menu);
-                    menu.addEventListener("click", (e) => e.stopPropagation());
-                }
-                menu.innerHTML = "";
-                [["Edit in Admin", "/admin?edit=" + id], ["View details", "/monitor/" + id]].forEach(([label, href]) => {
-                    const a = document.createElement("a");
-                    a.href = href; a.textContent = label; a.setAttribute("role", "menuitem");
-                    menu.appendChild(a);
-                });
-                menu.classList.add("open");
-                const r = btn.getBoundingClientRect();
-                const w = menu.offsetWidth, h = menu.offsetHeight;
-                let top = r.bottom + 4;
-                if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 4);
-                menu.style.top = top + "px";
-                menu.style.left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8)) + "px";
-                openBtn = btn;
-                btn.setAttribute("aria-expanded", "true");
-            }
             document.querySelectorAll("#rows-box .Box-row[data-id]").forEach((row) => {
-                const btn = document.createElement("button");
-                btn.type = "button";
-                btn.className = "more-btn row-more";
-                btn.setAttribute("aria-haspopup", "menu");
-                btn.setAttribute("aria-expanded", "false");
-                btn.setAttribute("aria-label", "More actions");
-                btn.innerHTML = "&#x22EF;";
-                btn.addEventListener("click", (e) => { e.stopPropagation(); open(btn, row.dataset.id); });
-                row.appendChild(btn);
+                const id = row.dataset.id;
+                row.appendChild(adminMenuButton("row-more", () => [
+                    ["Edit in Admin", "/admin?edit=" + id],
+                    ["View details", "/monitor/" + id],
+                ]));
             });
             // Matching spacer so the header columns stay aligned with rows.
             const firstBtn = document.querySelector("#rows-box .row-more");
@@ -578,11 +602,8 @@ export function renderStatusPage(rows, { title = "Status", active = "status", em
                 spacer.style.flex = "0 0 " + firstBtn.offsetWidth + "px";
                 header.appendChild(spacer);
             }
-            document.addEventListener("click", close);
-            document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
-            window.addEventListener("scroll", close, { passive: true });
-            window.addEventListener("resize", close);
         }
+        ${ADMIN_MENU_JS}
         // Same lightweight markers as the admin page (escape first, so notes
         // can never inject markup). Duplicated there, since each page's
         // script runs separately in the browser.
@@ -699,10 +720,20 @@ export function renderDetailPage(m) {
 
     return pageShell(m.name, `
         ${navRow()}
-        <h1 class="page-title"><span class="dot ${m.is_up == null ? "pending" : m.is_up ? "up" : "down"}"></span> ${m.name}</h1>
+        <h1 class="page-title" id="detail-title"><span class="dot ${m.is_up == null ? "pending" : m.is_up ? "up" : "down"}"></span> ${m.name}</h1>
         <p class="mono">${targetIdentifier(m)}</p>
         ${tagPillsHtml(m.tags, "goToTag")}
-        <script>function goToTag(tag) { location.href = "/?" + new URLSearchParams({ q: tag }); }</script>
+        <script>
+        function goToTag(tag) { location.href = "/?" + new URLSearchParams({ q: tag }); }
+        ${ADMIN_MENU_JS}
+        // Admin-only "⋯" next to the title (visitors never see it).
+        if (hasAdminToken()) {
+            document.getElementById("detail-title").appendChild(adminMenuButton("title-more", () => [
+                ["Edit in Admin", "/admin?edit=${m.id}"],
+                ["Back to Status", "/"],
+            ]));
+        }
+        </script>
 
         <div class="cards">
             <div class="card"><div class="label">Current status</div><div class="value" style="color: ${m.is_up == null ? "var(--fg-muted)" : `var(${m.is_up ? "--success-fg" : "--danger-fg"})`}">${m.is_up == null ? "Pending" : m.is_up ? "Up" : "Down"}</div><div class="mono">${m.stateSince != null ? `since ${timeAgo(m.stateSince)}` : ""}</div></div>
