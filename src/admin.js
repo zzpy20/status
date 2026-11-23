@@ -31,7 +31,7 @@ function validateTargetBody(body) {
     if (body.type === "heartbeat") {
         if (!body.name) return "name is required";
         const grace = Number(body.config && body.config.graceMinutes);
-        if (!Number.isInteger(grace) || grace < 2 || grace > 1440) return "grace period must be a whole number of minutes, 2-1440";
+        if (!Number.isInteger(grace) || grace < 2 || grace > 14400) return "grace period must be a whole number of minutes, 2-14400 (10 days)";
         return null;
     }
     if (!body.name || !body.host) return "name and host/URL/hostname are required";

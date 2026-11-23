@@ -505,7 +505,7 @@ export function renderAdminPage() {
             </div>
             <div id="new-fields-heartbeat" style="margin-top:8px; display:none">
                 <div class="form-row">
-                    <div class="field" style="flex:0 0 200px"><label>Grace period (minutes)</label><input id="new-graceMinutes" placeholder="5" type="number" min="2" /></div>
+                    <div class="field" style="flex:0 0 200px"><label>Grace period (minutes)</label><input id="new-graceMinutes" placeholder="5" type="number" min="2" max="14400" /></div>
                     <div class="field grow"><label>&nbsp;</label><div class="mono">Marked down if no push arrives within this window (confirmed on the next check, so alerts land ~1-2 min later).</div></div>
                 </div>
                 <div class="field" style="margin-top:8px">
