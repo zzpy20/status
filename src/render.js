@@ -184,6 +184,18 @@ const BASE_STYLE = `
     .modal { background: var(--canvas-default); border: 1px solid var(--border-default); border-radius: 8px; max-width: 640px; width: 100%; padding: 20px; }
     .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
     .modal-header h2 { font-size: 16px; font-weight: 600; margin: 0; }
+    /* Private notes on the status/archived pages -- only rendered client-side
+       for a browser holding the admin token (see attachNotes()). */
+    .note-btn { border: 0; background: none; padding: 0 2px; margin-left: 4px; color: var(--fg-muted); cursor: pointer; vertical-align: -2px; line-height: 0; }
+    .note-btn:hover, .note-btn[aria-expanded="true"] { color: var(--accent-fg); }
+    .note-btn svg { width: 14px; height: 14px; }
+    .note-pop {
+        position: fixed; z-index: 200; display: none; width: max-content; max-width: min(380px, calc(100vw - 32px));
+        background: var(--canvas-default); color: var(--fg-default); border: 1px solid var(--border-default); border-radius: 8px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.18); padding: 10px 12px; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere;
+    }
+    .note-pop.open { display: block; }
+    .note-pop-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; color: var(--fg-muted); margin-bottom: 4px; }
     /* Nudge shown when a backdrop click is ignored because the form has unsaved changes. */
     @keyframes modal-nudge { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
     .modal.nudge { animation: modal-nudge 0.25s ease-in-out 2; }
@@ -217,6 +229,10 @@ const BASE_STYLE = `
         body { padding: 20px 12px; }
         .Box-row { flex-direction: column; align-items: flex-start; gap: 6px; }
         .Box-row .actions { margin-left: 0; flex-wrap: wrap; width: 100%; }
+        /* Column widths are inline flex-basis values (e.g. flex: 0 0 170px);
+           once the row stacks vertically those become *heights*, leaving
+           huge gaps. Reset them to natural size here. */
+        .Box-row > div { flex: 0 0 auto !important; }
         .toolbar-row { flex-direction: column; align-items: stretch; }
         .toolbar-row button { width: 100%; }
         .form-row { flex-direction: column; align-items: stretch; }
@@ -282,7 +298,7 @@ export function renderStatusPage(rows, { title = "Status", active = "status", em
             <div style="min-width:90px">Last down</div>
         </div>`;
     const items = rows.map((r) => `
-        <div class="Box-row" data-search="${(r.name + " " + r.host + " " + (r.tags || "")).toLowerCase()}">
+        <div class="Box-row" data-id="${r.id}" data-search="${(r.name + " " + r.host + " " + (r.tags || "")).toLowerCase()}">
             <span class="dot ${r.paused ? "paused" : r.is_up == null ? "pending" : r.is_up ? "up" : "down"}"></span>
             <div class="grow">
                 ${r.pinned ? '<span class="pin-badge">Pinned</span>' : ""}
@@ -327,6 +343,102 @@ export function renderStatusPage(rows, { title = "Status", active = "status", em
         }
         const initialQ = new URLSearchParams(location.search).get("q");
         if (initialQ) { document.getElementById("search").value = initialQ; filterRows(); }
+
+        // Private notes: shown only in a browser that has the admin token
+        // saved (from /admin). Fetched here, client-side, so they never enter
+        // this edge-cached public HTML; visitors without the token see no
+        // change at all. Desktop: hover a row (short delay) and the note card
+        // appears under its name -- the mouse can move into the card to
+        // select text. Touch: tap the note icon. Esc / outside tap / scroll
+        // closes it.
+        (function () {
+            let token = "";
+            try { token = localStorage.getItem("status_admin_token") || ""; } catch (e) {}
+            if (!token) return;
+            fetch("/admin/api/notes", { headers: { Authorization: "Bearer " + token } })
+                .then((r) => (r.ok ? r.json() : null))
+                .then((notes) => { if (notes) attachNotes(notes); })
+                .catch(() => {});
+        })();
+        // Same lightweight markers as the admin page (escape first, so notes
+        // can never inject markup). Duplicated there, since each page's
+        // script runs separately in the browser.
+        function renderNotesHtml(text) {
+            let s = (text || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            s = s.replace(/\\*\\*(.+?)\\*\\*/g, "<strong>$1</strong>");
+            s = s.replace(/\\*(.+?)\\*/g, "<em>$1</em>");
+            s = s.replace(/__(.+?)__/g, "<u>$1</u>");
+            s = s.replace(/~~(.+?)~~/g, "<del>$1</del>");
+            return s.replace(/\\n/g, "<br>");
+        }
+        function attachNotes(notes) {
+            const pop = document.createElement("div");
+            pop.className = "note-pop";
+            pop.setAttribute("role", "tooltip");
+            document.body.appendChild(pop);
+            const canHover = window.matchMedia("(hover: hover)").matches;
+            let current = null, showTimer = null, hideTimer = null;
+
+            function place(anchor) {
+                const r = anchor.getBoundingClientRect();
+                const w = pop.offsetWidth, h = pop.offsetHeight;
+                const left = Math.max(16, Math.min(r.left, window.innerWidth - w - 16));
+                let top = r.bottom + 6;
+                if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
+                pop.style.left = left + "px";
+                pop.style.top = top + "px";
+            }
+            function show(row) {
+                clearTimeout(hideTimer);
+                if (current && current !== row) hide();
+                current = row;
+                pop.innerHTML = '<div class="note-pop-title">Notes \u00b7 only you see this</div>' + renderNotesHtml(notes[row.dataset.id]);
+                pop.classList.add("open");
+                place(row.querySelector("a") || row);
+                row.querySelector(".note-btn").setAttribute("aria-expanded", "true");
+            }
+            function hide() {
+                clearTimeout(showTimer);
+                pop.classList.remove("open");
+                if (current) current.querySelector(".note-btn").setAttribute("aria-expanded", "false");
+                current = null;
+            }
+            const icon = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v9.5A1.75 1.75 0 0 1 14.25 13H8.06l-2.573 2.573A1.458 1.458 0 0 1 3 14.543V13H1.75A1.75 1.75 0 0 1 0 11.25Zm1.75-.25a.25.25 0 0 0-.25.25v9.5c0 .138.112.25.25.25h2a.75.75 0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h6.5a.25.25 0 0 0 .25-.25v-9.5a.25.25 0 0 0-.25-.25Z"/></svg>';
+
+            document.querySelectorAll("#rows-box .Box-row[data-id]").forEach((row) => {
+                const note = notes[row.dataset.id];
+                if (!note) return;
+                row.dataset.search += " " + note.toLowerCase(); // search matches notes too, for you
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "note-btn";
+                btn.setAttribute("aria-label", "Show notes");
+                btn.setAttribute("aria-expanded", "false");
+                btn.innerHTML = icon;
+                btn.addEventListener("click", (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    if (current === row) hide(); else show(row);
+                });
+                const link = row.querySelector("a");
+                (link || row.querySelector(".grow")).insertAdjacentElement("afterend", btn);
+                if (canHover) {
+                    row.addEventListener("mouseenter", () => {
+                        clearTimeout(hideTimer); clearTimeout(showTimer);
+                        if (current !== row) showTimer = setTimeout(() => show(row), current ? 0 : 300);
+                    });
+                    row.addEventListener("mouseleave", () => {
+                        clearTimeout(showTimer);
+                        hideTimer = setTimeout(hide, 200);
+                    });
+                }
+            });
+            pop.addEventListener("mouseenter", () => clearTimeout(hideTimer));
+            pop.addEventListener("mouseleave", () => { hideTimer = setTimeout(hide, 200); });
+            document.addEventListener("click", (e) => { if (current && !pop.contains(e.target)) hide(); });
+            document.addEventListener("keydown", (e) => { if (e.key === "Escape") hide(); });
+            window.addEventListener("scroll", hide, { passive: true });
+            window.addEventListener("resize", hide);
+        }
         </script>
     `);
 }

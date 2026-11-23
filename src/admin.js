@@ -46,6 +46,18 @@ export async function handleAdminApi(request, env, url) {
 
     const parts = url.pathname.replace(/^\/admin\/api\/?/, "").split("/").filter(Boolean);
 
+    // /admin/api/notes -- just {id: notes}, for the hover notes on the public
+    // status/archived pages (fetched client-side only when the browser holds
+    // the admin token, so notes never enter the edge-cached public HTML).
+    // Deliberately not GET /targets: that runs statusRows(), which scans a
+    // day of raw checks per target -- far too many D1 reads per page view.
+    if (parts.length === 1 && parts[0] === "notes" && request.method === "GET") {
+        const { results } = await env.DB.prepare(
+            "SELECT id, notes FROM targets WHERE notes IS NOT NULL AND notes != ''"
+        ).all();
+        return Response.json(Object.fromEntries(results.map((r) => [r.id, r.notes])));
+    }
+
     // /admin/api/targets
     if (parts.length === 1 && parts[0] === "targets") {
         if (request.method === "GET") {
